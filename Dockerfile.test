@@ -1,0 +1,33 @@
+# Integration-test harness.
+#
+# This image is intentionally disposable: it creates users, writes files, and
+# runs commands against real system state. Running the tests on the host would
+# clobber /tmp and /etc/passwd; running them here does not.
+
+FROM golang:1.25-bookworm
+
+ARG TERRAFORM_VERSION=1.9.8
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        curl \
+        passwd \
+        unzip \
+    && rm -rf /var/lib/apt/lists/* \
+    && curl -fsSL "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip" -o /tmp/tf.zip \
+    && unzip /tmp/tf.zip -d /usr/local/bin \
+    && rm /tmp/tf.zip \
+    && terraform version
+
+WORKDIR /workspace
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+ENV TF_ACC=1 \
+    CGO_ENABLED=0
+
+CMD ["go", "test", "-count=1", "-timeout", "10m", "./..."]

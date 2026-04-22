@@ -1,0 +1,10 @@
+terraform-provider-sysutils
+.git
+.github
+*.tfstate
+*.tfstate.backup
+.terraform/
+.terraform.lock.hcl
+coverage.out
+coverage.html
+dist/
