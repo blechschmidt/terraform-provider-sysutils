@@ -90,4 +90,4 @@ Tag a commit matching `v*` and push the tag; the `release` GitHub workflow uses 
 
 ## License
 
-See repository for license details.
+MIT. See [LICENSE](./LICENSE).
