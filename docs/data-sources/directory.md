@@ -1,0 +1,90 @@
+---
+page_title: "sysutils_directory Data Source - terraform-provider-sysutils"
+subcategory: ""
+description: |-
+  Reads metadata and the entry names of a directory on the local filesystem.
+---
+
+# sysutils_directory (Data Source)
+
+Reads a directory's mode, ownership and immediate entries without managing it. Use it to make decisions based on the state of the host — for example to only create something if a directory exists, to copy the ownership of an existing directory, or to generate one resource per file found in a directory.
+
+A missing directory is **not** an error: `exists` is `false` and every other computed attribute is null. This lets you test for existence with a plain condition instead of failing the plan. A path that exists but is not a directory (after following symlinks) is an error.
+
+The data source is read during planning, so it sees the filesystem as it is before the apply. Directories or files that resources in the same configuration will create are not visible until the next run.
+
+## Example Usage
+
+### Check for a directory and inspect its ownership
+
+```terraform
+data "sysutils_directory" "nginx_conf" {
+  path = "/etc/nginx/conf.d"
+}
+
+output "nginx_installed" {
+  value = data.sysutils_directory.nginx_conf.exists
+}
+
+output "nginx_conf_owner" {
+  value = data.sysutils_directory.nginx_conf.owner
+}
+```
+
+### Create a file only if its directory already exists
+
+```terraform
+resource "sysutils_file" "nginx_site" {
+  count = data.sysutils_directory.nginx_conf.exists ? 1 : 0
+
+  path    = "${data.sysutils_directory.nginx_conf.path}/app.conf"
+  content = "server { listen 8080; }\n"
+  # Match the ownership of the directory we are writing into.
+  owner = data.sysutils_directory.nginx_conf.owner
+  group = data.sysutils_directory.nginx_conf.group
+}
+```
+
+### Iterate over the entries of a directory
+
+```terraform
+data "sysutils_directory" "releases" {
+  path = "/opt/app/releases"
+}
+
+locals {
+  # entries is null when the directory does not exist.
+  releases = data.sysutils_directory.releases.exists ? data.sysutils_directory.releases.entries : []
+}
+
+output "latest_release" {
+  # Entries are sorted lexically (byte order), so "v10" sorts before "v9".
+  value = length(local.releases) > 0 ? local.releases[length(local.releases) - 1] : null
+}
+```
+
+## Schema
+
+### Required
+
+- `path` (String) — Absolute path of the directory to read. Must be in canonical form (no `.`/`..` segments, duplicate or trailing slashes). Unlike the resources, `/` is allowed. Symlinks are followed.
+
+### Read-Only
+
+- `exists` (Boolean) — Whether the directory exists.
+- `mode` (String) — Four-digit octal mode of the directory, including setuid, setgid and sticky bits (e.g. `"0755"`, `"1777"`).
+- `owner` (String) — Username of the owner, or the numeric UID as a string if it has no passwd entry.
+- `group` (String) — Group name, or the numeric GID as a string if it has no group entry.
+- `uid` (Number) — Numeric UID of the owner.
+- `gid` (Number) — Numeric GID of the group.
+- `entries` (List of String) — Names (not full paths) of the directory's immediate entries — files, subdirectories, symlinks and so on — sorted lexically, excluding `.` and `..`. The listing is not recursive and includes hidden entries.
+- `id` (String) — Data source identifier (equal to `path`).
+
+All read-only attributes except `exists` and `id` are null when the directory does not exist.
+
+## Caveats
+
+- Reading a directory's entries requires read permission on it; a directory the provider cannot read produces an error, not `exists = false`.
+- `entries` is stored in Terraform state. For very large directories this bloats state and plans; point the data source at a narrow directory. Anyone who can read the state can see the entry names, which matters for private directories such as `/root`.
+- Unlike the resources, the data source follows symlinks, including at `path` itself. It never modifies anything.
+- The data source only works on Unix-like systems.

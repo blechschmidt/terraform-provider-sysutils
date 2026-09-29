@@ -2,18 +2,24 @@
 page_title: "sysutils Provider"
 subcategory: ""
 description: |-
-  Terraform provider for basic Linux system utility operations: writing files, managing users, and executing commands.
+  Terraform provider for basic Linux system utility operations: managing files, directories and symlinks, managing users, and executing commands.
 ---
 
 # sysutils Provider
 
-The `sysutils` provider exposes three primitives for host-level administration from Terraform:
+The `sysutils` provider exposes a small set of primitives for host-level administration from Terraform.
 
 | Resource | Purpose |
 |----------|---------|
 | [`sysutils_file`](./resources/file.md) | Write a file with given content, mode, and ownership. |
+| [`sysutils_directory`](./resources/directory.md) | Manage a directory with given mode and ownership. |
+| [`sysutils_symlink`](./resources/symlink.md) | Manage a symbolic link, switching its target atomically. |
 | [`sysutils_user`](./resources/user.md) | Create, update, and delete local users via `useradd`/`usermod`/`userdel`. |
 | [`sysutils_exec`](./resources/exec.md) | Run a command with a chosen environment, capturing exit code, stdout, and stderr. |
+
+| Data Source | Purpose |
+|-------------|---------|
+| [`sysutils_directory`](./data-sources/directory.md) | Read a directory's existence, mode, ownership, and entries. |
 
 It is intended for small bootstrapping tasks where installing and configuring something like Ansible or a full configuration-management system would be overkill.
 
@@ -42,6 +48,18 @@ resource "sysutils_file" "motd" {
 - Linux host (user and exec resources depend on POSIX semantics and the `shadow-utils`/`passwd` toolchain).
 - Privileges sufficient to perform the operations. Writing to `/etc`, changing file ownership, and creating users all require root. The provider itself makes no attempt to elevate privileges — run Terraform as root (or via `sudo`) when needed.
 - Terraform >= 1.5.
+
+## Security Model
+
+The provider usually runs as root and acts on paths that other local users may be able to influence, for example by creating entries in a shared directory such as `/tmp` before Terraform runs. The file, directory and symlink resources therefore follow these rules:
+
+- **The managed path itself is never followed if it is a symlink.** `sysutils_file` and `sysutils_directory` refuse to write, `chmod` or `chown` through a symlink at `path`, and fail instead. Files and directories are opened with `O_NOFOLLOW`, and mode and ownership are changed through that open descriptor (`fchmod`/`fchown`). Nothing can be swapped in between the check and the change. `sysutils_symlink` changes the ownership of the link itself with `lchown`.
+- **Ownership is applied before mode, and both are applied before new file content is written.** `chown` clears the setuid/setgid bits, so doing it first keeps modes such as `"4755"` intact. New content is never visible under the previous, possibly looser, mode.
+- **Special files are refused.** A FIFO, socket or device at a file's `path` is reported as "not a regular file", so it never causes the provider to hang or to read from or write to it.
+- **Destroy removes only what the resource created.** It uses `unlink`/`rmdir`, which never follow symlinks. If something else has taken the managed path's place, destroy leaves it alone and emits a warning.
+- **Recursive deletion (`force_destroy`) is held to a stricter standard.** No component of the path may be a symlink, and the directory is deleted relative to open directory descriptors, so a component swapped out mid-way cannot redirect it. Deletion never crosses into another mounted filesystem. `/`, empty paths and a fixed list of critical system directories (such as `/etc`, `/usr`, `/var/lib` and `/home`) are refused, and the check runs at plan time.
+- **Intermediate path components are resolved normally** for all other operations, so paths below system symlinks such as `/var/run` keep working. Every ancestor directory of a managed path must be writable only by trusted users. Otherwise a local user could redirect where a file or directory is created.
+- **Error messages contain only the configured path and the operating-system error.** File content never appears in diagnostics. Note that file content is stored in Terraform state; see the [`sysutils_file`](./resources/file.md) caveats.
 
 ## Schema
 

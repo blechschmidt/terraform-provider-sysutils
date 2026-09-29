@@ -1,12 +1,20 @@
 # terraform-provider-sysutils
 
-A Terraform provider for basic Linux system-administration primitives: writing files, managing local users, and executing commands. Useful for bootstrapping hosts where a full configuration-management system would be overkill.
+A Terraform provider for basic Linux system-administration primitives: managing files, directories and symlinks, managing local users, and executing commands. Useful for bootstrapping hosts where a full configuration-management system would be overkill.
 
 ## Features
 
-- `sysutils_file` — write a file with content, mode, and optional owner/group.
+### Resources
+
+- `sysutils_file` — write a file with content, mode, and optional owner/group. Supports import and detects drift.
+- `sysutils_directory` — manage a directory with mode and optional owner/group; optionally delete it recursively on destroy. Supports import and detects drift.
+- `sysutils_symlink` — manage a symbolic link, switching its target atomically, with optional owner/group of the link itself. Supports import and detects drift.
 - `sysutils_user` — create, update, and delete local users via `useradd`/`usermod`/`userdel`.
 - `sysutils_exec` — run a command (passed as a string array) with either the provider's environment or a custom one, capturing exit code, stdout, and stderr.
+
+### Data sources
+
+- `sysutils_directory` — read a directory's existence, mode, ownership and entry names without managing it.
 
 ## Installation
 
@@ -25,6 +33,24 @@ provider "sysutils" {}
 ## Quick example
 
 ```terraform
+resource "sysutils_directory" "app" {
+  path  = "/srv/app"
+  mode  = "0750"
+  owner = "root"
+  group = "root"
+}
+
+resource "sysutils_file" "app_config" {
+  path    = "${sysutils_directory.app.path}/app.conf"
+  content = "listen = 127.0.0.1:8080\n"
+  mode    = "0640"
+}
+
+resource "sysutils_symlink" "app_config_link" {
+  path   = "/etc/app.conf"
+  target = sysutils_file.app_config.path
+}
+
 resource "sysutils_file" "hello" {
   path    = "/etc/hello.conf"
   content = "greeting = hi\n"
@@ -60,8 +86,11 @@ output "migration_exit"   { value = sysutils_exec.migrate.exit_code }
 
 - [Provider overview](./docs/index.md)
 - [`sysutils_file`](./docs/resources/file.md)
+- [`sysutils_directory`](./docs/resources/directory.md)
+- [`sysutils_symlink`](./docs/resources/symlink.md)
 - [`sysutils_user`](./docs/resources/user.md)
 - [`sysutils_exec`](./docs/resources/exec.md)
+- [`sysutils_directory` data source](./docs/data-sources/directory.md)
 - [Examples](./examples)
 
 ## Requirements

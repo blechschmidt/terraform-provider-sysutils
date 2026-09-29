@@ -1,0 +1,86 @@
+---
+page_title: "sysutils_symlink Resource - terraform-provider-sysutils"
+subcategory: ""
+description: |-
+  Manages a symbolic link on the local filesystem, including the ownership of the link itself.
+---
+
+# sysutils_symlink (Resource)
+
+Creates a symbolic link at `path` that points to `target`, and optionally sets the `owner` / `group` of the link itself (which requires privileges). On destroy, only the link is removed; whatever it points to is never touched.
+
+Changing `target` updates the link in place **atomically**: a new link is created under a temporary name in the same directory and renamed over the old one. Processes resolving the path at the same moment see either the old target or the new one, never a missing link. This makes the resource suitable for "current release" switches such as `/opt/app/current -> releases/v2`.
+
+Missing parent directories of `path` are created with mode `0755`.
+
+## Example Usage
+
+### Switch the active release of an application
+
+```terraform
+resource "sysutils_directory" "release" {
+  path = "/opt/app/releases/v2"
+}
+
+resource "sysutils_symlink" "current" {
+  path = "/opt/app/current"
+  # Relative targets are resolved against the directory containing the link,
+  # so this points to /opt/app/releases/v2 and survives moving /opt/app.
+  target = "releases/v2"
+
+  depends_on = [sysutils_directory.release]
+}
+```
+
+### Link owned by a specific user
+
+```terraform
+resource "sysutils_symlink" "config" {
+  path   = "/home/alice/.app.conf"
+  target = "/etc/app/alice.conf"
+  owner  = "alice"
+  group  = "alice"
+}
+```
+
+## Schema
+
+### Required
+
+- `path` (String) — Absolute path of the symbolic link. Must be in canonical form (no `.`/`..` segments, duplicate or trailing slashes) and must not be `/`. Changing this forces a new resource.
+- `target` (String) — Path the link points to, stored verbatim. May be absolute or relative; relative targets are resolved by the kernel against the link's directory. The target does not need to exist. Must not be empty or contain NUL bytes. Changing this replaces the link atomically in place.
+
+### Optional
+
+- `owner` (String) — Username or numeric UID that should own the link itself. Applied with `lchown`, so the target's ownership is not affected. Requires privileges to change. If unset, the owner assigned at creation is kept.
+- `group` (String) — Group name or numeric GID of the link itself. Applied with `lchown`. Requires privileges to change. If unset, the group assigned at creation is kept.
+
+Symlinks have no meaningful permission bits on Linux, so there is no `mode` argument.
+
+### Read-Only
+
+- `id` (String) — Resource identifier (equal to `path`).
+
+## Import
+
+An existing symlink can be imported using its absolute path:
+
+```sh
+terraform import sysutils_symlink.current /opt/app/current
+```
+
+The link's current target, owner and group are read into state without following it. The next plan shows any differences from your configuration.
+
+## Drift Detection
+
+On refresh, the provider reads the link with `readlink`/`lstat` and records its current target, owner and group. A target or ownership changed outside Terraform shows up in the next plan and is restored on apply. If `owner` or `group` is not set in the configuration, its current value is recorded but no change is ever planned for it.
+
+If the link has been deleted, it is removed from state and recreated on the next apply.
+
+## Caveats
+
+- An existing symlink at `path` is silently replaced on create, whatever it pointed to.
+- The provider never overwrites a regular file or directory. If `path` already exists and is not a symlink when the link is created, the apply fails. If the link is replaced by something else after creation, refresh drops it from state and the next apply fails for the same reason, and destroy leaves the replacement untouched with a warning. Remove the conflicting entry manually to recover.
+- A link whose target does not exist ("dangling") is valid and is not reported as drift.
+- The check that `path` is not a regular file and the atomic rename that installs the link are two separate steps. A regular file created at `path` by another process in between would be replaced. A directory can never be replaced. Missing parent directories are created, and symlinks in the parent components of `path` are followed; see the provider's [security model](../index.md#security-model).
+- The resource only works on Unix-like systems.
