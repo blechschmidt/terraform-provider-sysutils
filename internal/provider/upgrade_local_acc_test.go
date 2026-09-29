@@ -862,3 +862,30 @@ resource "sysutils_ssh_authorized_key" "test" {
 `, name, home, testSSHKeyText(testSSHKey(t, 9))+" upgrade")),
 	})
 }
+
+func TestAccUpgradeLocal_hostsEntry(t *testing.T) {
+	p := filepath.Join(t.TempDir(), "hosts")
+	const orig = "127.0.0.1\tlocalhost\n::1\tlocalhost ip6-localhost\n"
+	if err := os.WriteFile(p, []byte(orig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	resource.Test(t, resource.TestCase{
+		Steps: localUpgradeSteps(t, "sysutils_hosts_entry", fmt.Sprintf(`
+resource "sysutils_hosts_entry" "v4" {
+  path      = %[1]q
+  ip        = "10.0.0.5"
+  hostnames = ["db.internal", "db"]
+  comment   = "upgrade"
+}
+
+resource "sysutils_hosts_entry" "v6" {
+  path            = %[1]q
+  ip              = "fd00::5"
+  hostnames       = ["db.internal", "db"]
+  allow_duplicate = true
+}
+`, p)),
+		// Destroy removes only the managed lines.
+		CheckDestroy: checkFileText(p, orig),
+	})
+}
