@@ -53,21 +53,24 @@ func checkCommands(t *testing.T, s *scriptedRunner, want ...string) {
 }
 
 func TestPackageEnvIsNoninteractive(t *testing.T) {
-	s := &scriptedRunner{rules: []scriptedRule{{prefix: "apt-get"}}}
+	s := &scriptedRunner{rules: []scriptedRule{{prefix: "apt-cache policy", stdout: helloPolicy}, {prefix: "apt-get"}}}
 	a := newPackageBackend(packageManagerApt, s.run)
 	if err := a.Install(context.Background(), "hello", ""); err != nil {
 		t.Fatal(err)
 	}
-	env := s.specs[0].Env
+	env := s.specs[1].Env
 	for _, want := range []string{"DEBIAN_FRONTEND=noninteractive", "LC_ALL=C", "NEEDRESTART_MODE=l", "APT_LISTCHANGES_FRONTEND=none"} {
 		if !slices.Contains(env, want) {
 			t.Errorf("environment lacks %s", want)
 		}
 	}
-	if s.specs[0].Timeout != packageChangeTimeout || s.specs[0].MaxOutputBytes != packageOutputLimit {
-		t.Errorf("timeout %s, output limit %d", s.specs[0].Timeout, s.specs[0].MaxOutputBytes)
+	if s.specs[1].Timeout != packageChangeTimeout || s.specs[1].MaxOutputBytes != packageOutputLimit {
+		t.Errorf("timeout %s, output limit %d", s.specs[1].Timeout, s.specs[1].MaxOutputBytes)
 	}
 }
+
+// helloPolicy is "apt-cache policy hello" output for a package in the index.
+const helloPolicy = "hello:\n  Installed: (none)\n  Candidate: 2.10-3\n  Version table:\n     2.10-3 500\n"
 
 func TestAptBackend(t *testing.T) {
 	ctx := context.Background()
@@ -95,8 +98,9 @@ func TestAptBackend(t *testing.T) {
 			t.Fatalf("got %v", err)
 		}
 	})
+	policy := "apt-cache policy -- hello"
 	t.Run("install", func(t *testing.T) {
-		s := &scriptedRunner{rules: []scriptedRule{{prefix: "apt-get"}}}
+		s := &scriptedRunner{rules: []scriptedRule{{prefix: policy, stdout: helloPolicy}, {prefix: "apt-get"}}}
 		a := newPackageBackend(packageManagerApt, s.run)
 		if err := a.Install(ctx, "hello", ""); err != nil {
 			t.Fatal(err)
@@ -111,8 +115,11 @@ func TestAptBackend(t *testing.T) {
 			t.Fatal(err)
 		}
 		checkCommands(t, s,
+			policy,
 			"apt-get install "+aptGet+" -- hello",
+			policy,
 			"apt-get install "+aptGet+" --allow-downgrades -- hello=1:2.10-3",
+			policy,
 			"apt-get install "+aptGet+" -- hello",
 			"apt-get update -q -o DPkg::Lock::Timeout=300",
 		)
@@ -123,7 +130,7 @@ func TestAptBackend(t *testing.T) {
 			out.WriteString("noise line " + string(rune('a'+i%26)) + "\n")
 		}
 		out.WriteString("E: Unable to locate package hello\n")
-		s := &scriptedRunner{rules: []scriptedRule{{prefix: "apt-get", exit: 100, stderr: out.String()}}}
+		s := &scriptedRunner{rules: []scriptedRule{{prefix: policy, stdout: helloPolicy}, {prefix: "apt-get", exit: 100, stderr: out.String()}}}
 		err := newPackageBackend(packageManagerApt, s.run).Install(ctx, "hello", "")
 		if err == nil || !strings.Contains(err.Error(), "exit status 100") || !strings.HasSuffix(err.Error(), "E: Unable to locate package hello") {
 			t.Fatalf("got %v", err)
@@ -133,11 +140,11 @@ func TestAptBackend(t *testing.T) {
 		}
 	})
 	t.Run("remove", func(t *testing.T) {
-		s := &scriptedRunner{rules: []scriptedRule{{prefix: "apt-get remove"}}}
+		s := &scriptedRunner{rules: []scriptedRule{{prefix: policy, stdout: helloPolicy}, {prefix: "apt-get remove"}}}
 		if err := newPackageBackend(packageManagerApt, s.run).Remove(ctx, "hello"); err != nil {
 			t.Fatal(err)
 		}
-		checkCommands(t, s, "apt-get remove "+aptGet+" -- hello")
+		checkCommands(t, s, policy, "apt-get remove "+aptGet+" -- hello")
 	})
 	t.Run("up to date", func(t *testing.T) {
 		for policy, want := range map[string]bool{
@@ -215,7 +222,7 @@ func TestRPMBackend(t *testing.T) {
 		if err := r.Remove(ctx, "tree"); err != nil {
 			t.Fatal(err)
 		}
-		checkCommands(t, s, "yum install -y -q tree", "yum makecache -q", "yum remove -y -q tree")
+		checkCommands(t, s, "yum install -y -q -- tree", "yum makecache -q", "yum remove -y -q -- tree")
 	})
 	t.Run("install version", func(t *testing.T) {
 		s := &scriptedRunner{rules: []scriptedRule{
@@ -225,7 +232,7 @@ func TestRPMBackend(t *testing.T) {
 		if err := newPackageBackend(packageManagerDnf, s.run).Install(ctx, "tree", "0:2.2.1-1.fc42"); err != nil {
 			t.Fatal(err)
 		}
-		checkCommands(t, s, "dnf install -y -q tree-0:2.2.1-1.fc42", rpmQuery+"tree")
+		checkCommands(t, s, "dnf install -y -q -- tree-0:2.2.1-1.fc42", rpmQuery+"tree")
 	})
 	t.Run("install older version downgrades", func(t *testing.T) {
 		s := &scriptedRunner{rules: []scriptedRule{
@@ -236,7 +243,7 @@ func TestRPMBackend(t *testing.T) {
 		if err := newPackageBackend(packageManagerDnf, s.run).Install(ctx, "tree", "2.2.1-1.fc42"); err != nil {
 			t.Fatal(err)
 		}
-		checkCommands(t, s, "dnf install -y -q tree-2.2.1-1.fc42", rpmQuery+"tree", "dnf downgrade -y -q tree-2.2.1-1.fc42")
+		checkCommands(t, s, "dnf install -y -q -- tree-2.2.1-1.fc42", rpmQuery+"tree", "dnf downgrade -y -q -- tree-2.2.1-1.fc42")
 	})
 	t.Run("upgrade", func(t *testing.T) {
 		s := &scriptedRunner{rules: []scriptedRule{
@@ -246,7 +253,7 @@ func TestRPMBackend(t *testing.T) {
 		if err := newPackageBackend(packageManagerDnf, s.run).Upgrade(ctx, "tree"); err != nil {
 			t.Fatal(err)
 		}
-		checkCommands(t, s, rpmQuery+"tree", "dnf upgrade -y -q tree")
+		checkCommands(t, s, rpmQuery+"tree", "dnf upgrade -y -q -- tree")
 
 		s = &scriptedRunner{rules: []scriptedRule{
 			{prefix: "rpm", exit: 1, stdout: "package tree is not installed\n"},
@@ -255,11 +262,11 @@ func TestRPMBackend(t *testing.T) {
 		if err := newPackageBackend(packageManagerDnf, s.run).Upgrade(ctx, "tree"); err != nil {
 			t.Fatal(err)
 		}
-		checkCommands(t, s, rpmQuery+"tree", "dnf install -y -q tree")
+		checkCommands(t, s, rpmQuery+"tree", "dnf install -y -q -- tree")
 	})
 	t.Run("up to date", func(t *testing.T) {
 		for exit, want := range map[int]bool{0: true, 100: false} {
-			s := &scriptedRunner{rules: []scriptedRule{{prefix: "dnf check-update -q tree", exit: exit}}}
+			s := &scriptedRunner{rules: []scriptedRule{{prefix: "dnf check-update -q -- tree", exit: exit}}}
 			got, err := newPackageBackend(packageManagerDnf, s.run).UpToDate(ctx, "tree")
 			if err != nil || got != want {
 				t.Errorf("exit %d: got %v, %v; want %v", exit, got, err, want)
@@ -281,7 +288,7 @@ func TestApkBackend(t *testing.T) {
 		if err != nil || info != (packageInfo{Installed: true, Version: "2.2.1-r0"}) {
 			t.Fatalf("got %+v, %v", info, err)
 		}
-		checkCommands(t, s, "apk info --installed --verbose tree")
+		checkCommands(t, s, "apk info --installed --verbose -- tree")
 	})
 	t.Run("query not installed", func(t *testing.T) {
 		s := &scriptedRunner{rules: []scriptedRule{{prefix: "apk info", exit: 1}}}
@@ -305,10 +312,10 @@ func TestApkBackend(t *testing.T) {
 			}
 		}
 		checkCommands(t, s,
-			"apk add --quiet --no-progress tree",
-			"apk add --quiet --no-progress tree=2.2.1-r0",
-			"apk add --quiet --no-progress --upgrade tree",
-			"apk del --quiet --no-progress tree",
+			"apk add --quiet --no-progress --wait 300 -- tree",
+			"apk add --quiet --no-progress --wait 300 -- tree=2.2.1-r0",
+			"apk add --quiet --no-progress --wait 300 --upgrade -- tree",
+			"apk del --quiet --no-progress --wait 300 -- tree",
 			"apk update --quiet --no-progress",
 		)
 	})
@@ -321,7 +328,7 @@ func TestApkBackend(t *testing.T) {
 		} {
 			s := &scriptedRunner{rules: []scriptedRule{
 				{prefix: "apk info", stdout: "tree-2.2.1-r0\n"},
-				{prefix: "apk version tree", stdout: out},
+				{prefix: "apk version -- tree", stdout: out},
 			}}
 			got, err := newPackageBackend(packageManagerApk, s.run).UpToDate(ctx, "tree")
 			if err != nil || got != want {

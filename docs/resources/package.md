@@ -57,7 +57,7 @@ output "nginx_version" {
 
 ### Required
 
-- `name` (String) Name of the package, such as `"nginx"`. 1 to 128 letters, digits, `.`, `_`, `+` or `-`, starting with a letter or digit; with apt, lowercase and at least 2 characters, as Debian requires. Architecture qualifiers, version constraints, globs, file paths and virtual `provides` are not accepted. Changing this forces a new resource.
+- `name` (String) Name of the package, such as `"nginx"`. 1 to 128 letters, digits, `.`, `_`, `+` or `-`, starting with a letter or digit; with apt, lowercase and at least 2 characters, as Debian requires. Architecture qualifiers, version constraints, globs, file paths and virtual `provides` are not accepted, nor names ending in `-` with apt, `.rpm` with dnf and yum, or `.apk` with apk, which those tools take for a removal or a local package file. With apt, the name must be that of a package in the package index, since apt takes any other name for a pattern. Changing this forces a new resource.
 
 ### Optional
 

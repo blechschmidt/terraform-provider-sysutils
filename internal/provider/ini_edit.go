@@ -6,8 +6,9 @@ package provider
 //
 // The editor works on the file line by line and only ever rewrites, inserts
 // or removes the lines of the one key it manages. Comments, blank lines,
-// ordering, indentation, unrelated keys and line endings (including "\r\n"
-// and a missing newline at the end of the file) are kept byte for byte.
+// ordering, indentation, unrelated keys, line endings (including "\r\n"
+// and a missing newline at the end of the file) and a byte order mark are
+// kept byte for byte.
 
 import (
 	"errors"
@@ -30,14 +31,26 @@ type iniLine struct {
 
 // iniFile is an INI file split into lines.
 type iniFile struct {
+	// bom is the UTF-8 byte order mark that the file starts with, if any.
+	// It is kept apart from the first line, which would otherwise not be
+	// recognised as a section header or key, and stays at the start of the
+	// file whatever lines are inserted or removed.
+	bom   string
 	lines []iniLine
 }
+
+// utf8BOM is the UTF-8 encoding of U+FEFF, which Windows editors write at
+// the start of INI files.
+const utf8BOM = "\xef\xbb\xbf"
 
 // parseIniFile splits data into lines. A final line terminator terminates
 // the last line rather than starting an empty one.
 func parseIniFile(data []byte) *iniFile {
 	f := &iniFile{}
 	s := string(data)
+	if rest, ok := strings.CutPrefix(s, utf8BOM); ok {
+		f.bom, s = utf8BOM, rest
+	}
 	for s != "" {
 		i := strings.IndexByte(s, '\n')
 		if i < 0 {
@@ -57,6 +70,7 @@ func parseIniFile(data []byte) *iniFile {
 // bytes is the inverse of parseIniFile.
 func (f *iniFile) bytes() []byte {
 	var b strings.Builder
+	b.WriteString(f.bom)
 	for _, l := range f.lines {
 		b.WriteString(l.text)
 		b.WriteString(l.eol)

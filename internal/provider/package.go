@@ -13,7 +13,10 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/user"
+	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -37,6 +40,11 @@ const (
 	// aptLockTimeout is how many seconds apt waits for the dpkg lock held by
 	// another process, such as unattended-upgrades, before failing.
 	aptLockTimeout = "300"
+	// apkLockTimeout is the same for apk's database lock.
+	apkLockTimeout = "300"
+	// defaultPackagePath is the PATH of package manager commands if the
+	// provider has none. dpkg refuses to run without the sbin directories.
+	defaultPackagePath = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 )
 
 // Package manager kinds. packageManagerAuto selects the first one found.
@@ -113,14 +121,39 @@ func validatePackageVersion(version string) error {
 }
 
 // validatePackageNameFor applies the stricter rules of a specific manager.
+// Besides the manager's own naming rules, these exclude names that the
+// manager's command line takes for something other than a package name:
+// apt-get takes a trailing "-" as an instruction to remove the package
+// ("apt-get install nginx-" removes nginx), and dnf, yum and apk install
+// an argument ending in ".rpm" or ".apk" from a local file of that name,
+// relative to the provider's working directory, even after "--".
 func validatePackageNameFor(kind, name string) error {
 	if err := validatePackageName(name); err != nil {
 		return err
 	}
-	if kind == packageManagerApt && !debPackageNamePattern.MatchString(name) {
-		return fmt.Errorf("package name %q is not a valid Debian package name: at least 2 lowercase letters, digits, \".\", \"+\" or \"-\", starting with a letter or digit", name)
+	switch kind {
+	case packageManagerApt:
+		if !debPackageNamePattern.MatchString(name) {
+			return fmt.Errorf("package name %q is not a valid Debian package name: at least 2 lowercase letters, digits, \".\", \"+\" or \"-\", starting with a letter or digit", name)
+		}
+		if strings.HasSuffix(name, "-") {
+			return fmt.Errorf("package name %q must not end with \"-\", which apt-get takes as an instruction to remove the package", name)
+		}
+	case packageManagerDnf, packageManagerYum:
+		if hasSuffixFold(name, ".rpm") {
+			return fmt.Errorf("package name %q must not end with \".rpm\", which %s takes for a local package file", name, kind)
+		}
+	case packageManagerApk:
+		if hasSuffixFold(name, ".apk") {
+			return fmt.Errorf("package name %q must not end with \".apk\", which apk takes for a local package file", name)
+		}
 	}
 	return nil
+}
+
+// hasSuffixFold is strings.HasSuffix, ignoring ASCII case.
+func hasSuffixFold(s, suffix string) bool {
+	return len(s) >= len(suffix) && strings.EqualFold(s[len(s)-len(suffix):], suffix)
 }
 
 // validatePackageVersionFor applies the stricter rules of a specific
@@ -137,6 +170,10 @@ func validatePackageVersionFor(kind, version string) error {
 	case packageManagerDnf, packageManagerYum:
 		if !rpmVersionPattern.MatchString(version) {
 			return fmt.Errorf("version %q is not a valid RPM version: [epoch:]version-release, such as \"2.2.1-1.fc42\", as rpm -q reports it; the release is required", version)
+		}
+		// The version ends the name-version argument of dnf and yum.
+		if hasSuffixFold(version, ".rpm") {
+			return fmt.Errorf("version %q must not end with \".rpm\", which %s takes for a local package file", version, kind)
 		}
 	case packageManagerApk:
 		if !apkVersionPattern.MatchString(version) {
@@ -304,14 +341,40 @@ type packageCommands struct {
 	run commandRunner
 }
 
-// packageEnv is the environment of package manager commands: the
-// provider's own, in the C locale so that output can be parsed, and with
-// every interactive prompt that the Debian tool chain knows of disabled.
-// needrestart, run by apt on Ubuntu, only lists services to restart rather
-// than asking or restarting them.
+// packageEnvInherited lists the only variables of the provider's
+// environment that package manager commands inherit: the search path, and
+// proxy settings, which hosts without direct internet access need to reach
+// their repositories. Everything else is dropped, because package managers
+// read much of their configuration from the environment: APT_CONFIG
+// replaces apt's configuration file, DPKG_ADMINDIR and DPKG_ROOT point dpkg
+// and dpkg-query at another database, DPKG_FRONTEND_LOCKED makes dpkg skip
+// its frontend lock, DNF_VAR_* and YUM0-9 rewrite repository URLs, and
+// DEBCONF_* and UCF_* change how configuration questions are answered.
+var packageEnvInherited = []string{
+	"PATH",
+	"http_proxy", "https_proxy", "ftp_proxy", "no_proxy", "all_proxy",
+	"HTTP_PROXY", "HTTPS_PROXY", "FTP_PROXY", "NO_PROXY", "ALL_PROXY",
+}
+
+// packageEnv is the environment of package manager commands: the few
+// inherited variables of packageEnvInherited, the C locale so that output
+// can be parsed, and every interactive prompt that the Debian tool chain
+// knows of disabled. needrestart, run by apt on Ubuntu, only lists services
+// to restart rather than asking or restarting them.
 func packageEnv() []string {
-	return append(os.Environ(),
+	var env []string
+	for _, k := range packageEnvInherited {
+		if v, ok := os.LookupEnv(k); ok {
+			env = append(env, k+"="+v)
+		}
+	}
+	if os.Getenv("PATH") == "" {
+		env = append(env, "PATH="+defaultPackagePath)
+	}
+	return append(env,
+		"HOME="+packageHome(),
 		"LC_ALL=C",
+		"LANG=C",
 		"DEBIAN_FRONTEND=noninteractive",
 		"DEBCONF_NONINTERACTIVE_SEEN=true",
 		"APT_LISTCHANGES_FRONTEND=none",
@@ -319,6 +382,17 @@ func packageEnv() []string {
 		"UCF_FORCE_CONFFOLD=1",
 		"NEEDRESTART_MODE=l",
 	)
+}
+
+// packageHome returns the home directory of the user the provider runs as,
+// from the user database rather than the inherited HOME: rpm reads macros
+// from ~/.rpmmacros, which can run shell commands, so with a HOME kept by
+// "sudo -E" the invoking user would control commands run as root.
+func packageHome() string {
+	if u, err := user.LookupId(strconv.Itoa(os.Geteuid())); err == nil && filepath.IsAbs(u.HomeDir) {
+		return u.HomeDir
+	}
+	return "/"
 }
 
 // exec runs argv and returns its result. A command that could not be
@@ -438,25 +512,98 @@ func parseDpkgQuery(out, name string) packageInfo {
 }
 
 func (a aptBackend) UpToDate(ctx context.Context, name string) (bool, error) {
-	argv := []string{"apt-cache", "policy", "--", name}
-	res, err := a.exec(ctx, packageQueryTimeout, argv...)
+	installed, candidate, err := a.policy(ctx, name)
 	if err != nil {
 		return false, err
 	}
-	if res.ExitCode != 0 {
-		return false, packageCommandError(argv, res)
-	}
-	installed, candidate := parseAptPolicy(res.Stdout.String())
 	// Without a candidate, the package is in no repository apt knows of,
 	// so there is nothing to upgrade to.
 	return candidate == "" || candidate == installed, nil
 }
 
+// policy runs "apt-cache policy" for name and returns its installed and
+// candidate versions. It fails unless apt resolves name to exactly the
+// package of that name, which must therefore be in the package index.
+//
+// apt takes a name that no package has for a pattern: as a regular
+// expression if it contains "." or "+" ("lib.+" selects every package
+// whose name contains "lib"), and apt-get takes a trailing "+" or "-" as an
+// instruction to install or remove the package without it. "--" does not
+// turn this off, so a name must never reach apt-get unless it is in the
+// index verbatim. apt-cache resolves names like apt-get, so the package
+// headers of its output show what apt-get would act on.
+func (a aptBackend) policy(ctx context.Context, name string) (installed, candidate string, err error) {
+	argv := []string{"apt-cache", "policy", "--", name}
+	res, err := a.exec(ctx, packageQueryTimeout, argv...)
+	if err != nil {
+		return "", "", err
+	}
+	if res.ExitCode != 0 {
+		return "", "", packageCommandError(argv, res)
+	}
+	out := res.Stdout.String()
+	headers := aptPolicyHeaders(out)
+	if len(headers) == 0 {
+		return "", "", fmt.Errorf("package %s is not in the package index of apt; check the name, or set update_cache = true if the index is missing or out of date", name)
+	}
+	for _, h := range headers {
+		if !isAptPolicyHeaderFor(h, name) {
+			others := make([]string, 0, len(headers))
+			for _, h := range headers {
+				others = append(others, strings.TrimSuffix(h, ":"))
+			}
+			if len(others) > 5 {
+				others = append(others[:5], "...")
+			}
+			return "", "", fmt.Errorf("package %s is not in the package index of apt, which would take the name for a pattern and act on other packages (%s) instead; use the exact name of a package", name, strings.Join(others, ", "))
+		}
+	}
+	installed, candidate = parseAptPolicy(out)
+	return installed, candidate, nil
+}
+
+// aptPolicyHeaders returns the package headers of "apt-cache policy"
+// output: the unindented lines, such as "hello:" or "hello:i386:".
+func aptPolicyHeaders(out string) []string {
+	var headers []string
+	for _, line := range strings.Split(out, "\n") {
+		if line != "" && line[0] != ' ' && line[0] != '\t' {
+			headers = append(headers, strings.TrimSpace(line))
+		}
+	}
+	return headers
+}
+
+// aptArchPattern matches Debian architecture names.
+var aptArchPattern = regexp.MustCompile(`^[a-z0-9]+(-[a-z0-9]+)*$`)
+
+// isAptPolicyHeaderFor reports whether header is that of the package name,
+// for the native ("name:") or another architecture ("name:arch:").
+func isAptPolicyHeaderFor(header, name string) bool {
+	rest, ok := strings.CutPrefix(header, name+":")
+	if !ok {
+		return false
+	}
+	if rest == "" {
+		return true
+	}
+	arch, ok := strings.CutSuffix(rest, ":")
+	return ok && aptArchPattern.MatchString(arch)
+}
+
 // parseAptPolicy returns the installed and candidate versions from
 // "apt-cache policy" output for a single package; "(none)" is returned as
-// "".
+// "". Only the first package block counts: with several architectures
+// installed, that of the native one.
 func parseAptPolicy(out string) (installed, candidate string) {
+	headers := 0
 	for _, line := range strings.Split(out, "\n") {
+		if line != "" && line[0] != ' ' && line[0] != '\t' {
+			if headers++; headers > 1 {
+				break
+			}
+			continue
+		}
 		key, value, ok := strings.Cut(strings.TrimSpace(line), ":")
 		if !ok {
 			continue
@@ -476,6 +623,9 @@ func parseAptPolicy(out string) (installed, candidate string) {
 }
 
 func (a aptBackend) Install(ctx context.Context, name, version string) error {
+	if _, _, err := a.policy(ctx, name); err != nil {
+		return err
+	}
 	if version == "" {
 		return a.aptGet(ctx, "install", "--", name)
 	}
@@ -485,10 +635,16 @@ func (a aptBackend) Install(ctx context.Context, name, version string) error {
 // Upgrade installs the candidate version; "apt-get install" upgrades a
 // package that is already installed.
 func (a aptBackend) Upgrade(ctx context.Context, name string) error {
+	if _, _, err := a.policy(ctx, name); err != nil {
+		return err
+	}
 	return a.aptGet(ctx, "install", "--", name)
 }
 
 func (a aptBackend) Remove(ctx context.Context, name string) error {
+	if _, _, err := a.policy(ctx, name); err != nil {
+		return err
+	}
 	return a.aptGet(ctx, "remove", "--", name)
 }
 
@@ -497,8 +653,8 @@ func (a aptBackend) UpdateCache(ctx context.Context) error {
 }
 
 // rpmBackend manages packages with dnf or yum, and queries them with rpm.
-// Options are not separated from package names with "--", which dnf5 does
-// not accept; package names and versions never start with "-".
+// Package arguments always follow "--", which dnf4, dnf5 and yum accept, so
+// that they can never be taken for options.
 type rpmBackend struct {
 	packageCommands
 	tool string // "dnf" or "yum"
@@ -543,7 +699,7 @@ func parseRPMQuery(out, name string) packageInfo {
 // UpToDate uses "check-update", which exits with 100 if updates are
 // available and 0 if not.
 func (r rpmBackend) UpToDate(ctx context.Context, name string) (bool, error) {
-	argv := []string{r.tool, "check-update", "-q", name}
+	argv := []string{r.tool, "check-update", "-q", "--", name}
 	res, err := r.exec(ctx, packageQueryTimeout, argv...)
 	if err != nil {
 		return false, err
@@ -562,7 +718,7 @@ func (r rpmBackend) Install(ctx context.Context, name, version string) error {
 	if version != "" {
 		spec = name + "-" + version
 	}
-	if err := r.change(ctx, r.tool, "install", "-y", "-q", spec); err != nil {
+	if err := r.change(ctx, r.tool, "install", "-y", "-q", "--", spec); err != nil {
 		return err
 	}
 	if version == "" {
@@ -577,7 +733,7 @@ func (r rpmBackend) Install(ctx context.Context, name, version string) error {
 	if info.Installed && samePackageVersion(info.Version, version) {
 		return nil
 	}
-	return r.change(ctx, r.tool, "downgrade", "-y", "-q", spec)
+	return r.change(ctx, r.tool, "downgrade", "-y", "-q", "--", spec)
 }
 
 func (r rpmBackend) Upgrade(ctx context.Context, name string) error {
@@ -586,27 +742,28 @@ func (r rpmBackend) Upgrade(ctx context.Context, name string) error {
 		return err
 	}
 	if !info.Installed {
-		return r.change(ctx, r.tool, "install", "-y", "-q", name)
+		return r.change(ctx, r.tool, "install", "-y", "-q", "--", name)
 	}
-	return r.change(ctx, r.tool, "upgrade", "-y", "-q", name)
+	return r.change(ctx, r.tool, "upgrade", "-y", "-q", "--", name)
 }
 
 func (r rpmBackend) Remove(ctx context.Context, name string) error {
-	return r.change(ctx, r.tool, "remove", "-y", "-q", name)
+	return r.change(ctx, r.tool, "remove", "-y", "-q", "--", name)
 }
 
 func (r rpmBackend) UpdateCache(ctx context.Context) error {
 	return r.change(ctx, r.tool, "makecache", "-q")
 }
 
-// apkBackend manages packages with Alpine's apk. As with dnf, package
-// arguments are not preceded by "--".
+// apkBackend manages packages with Alpine's apk. Package arguments always
+// follow "--". Changes wait for apk's database lock, held by another apk
+// process, rather than failing at once.
 type apkBackend struct{ packageCommands }
 
 func (apkBackend) Kind() string { return packageManagerApk }
 
 func (a apkBackend) Query(ctx context.Context, name string) (packageInfo, error) {
-	argv := []string{"apk", "info", "--installed", "--verbose", name}
+	argv := []string{"apk", "info", "--installed", "--verbose", "--", name}
 	res, err := a.exec(ctx, packageQueryTimeout, argv...)
 	if err != nil {
 		return packageInfo{}, err
@@ -636,7 +793,7 @@ func (a apkBackend) UpToDate(ctx context.Context, name string) (bool, error) {
 	if err != nil || !info.Installed {
 		return false, err
 	}
-	argv := []string{"apk", "version", name}
+	argv := []string{"apk", "version", "--", name}
 	res, err := a.exec(ctx, packageQueryTimeout, argv...)
 	if err != nil {
 		return false, err
@@ -666,15 +823,15 @@ func (a apkBackend) Install(ctx context.Context, name, version string) error {
 	if version != "" {
 		spec = name + "=" + version
 	}
-	return a.change(ctx, "apk", "add", "--quiet", "--no-progress", spec)
+	return a.change(ctx, "apk", "add", "--quiet", "--no-progress", "--wait", apkLockTimeout, "--", spec)
 }
 
 func (a apkBackend) Upgrade(ctx context.Context, name string) error {
-	return a.change(ctx, "apk", "add", "--quiet", "--no-progress", "--upgrade", name)
+	return a.change(ctx, "apk", "add", "--quiet", "--no-progress", "--wait", apkLockTimeout, "--upgrade", "--", name)
 }
 
 func (a apkBackend) Remove(ctx context.Context, name string) error {
-	return a.change(ctx, "apk", "del", "--quiet", "--no-progress", name)
+	return a.change(ctx, "apk", "del", "--quiet", "--no-progress", "--wait", apkLockTimeout, "--", name)
 }
 
 func (a apkBackend) UpdateCache(ctx context.Context) error {
