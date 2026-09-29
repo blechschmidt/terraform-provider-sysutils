@@ -1,6 +1,6 @@
 # terraform-provider-sysutils
 
-A Terraform provider for basic Linux system-administration primitives: files, lines in files, templated files, directories, symlinks, local users and groups, systemd units, mounts, kernel parameters and modules, cron jobs, OS packages and package repositories, and commands. It is meant for bootstrapping hosts where a full configuration-management system would be overkill, and for the last mile of host setup that other providers don't cover.
+A Terraform provider for basic Linux system-administration primitives: files, lines in files, templated files, directories, symlinks, local users and groups, systemd units and services, mounts, kernel parameters and modules, cron jobs, OS packages and package repositories, and commands. It is meant for bootstrapping hosts where a full configuration-management system would be overkill, and for the last mile of host setup that other providers don't cover.
 
 The provider acts on the machine Terraform runs on. It has no remote-execution mode.
 
@@ -17,6 +17,7 @@ The provider acts on the machine Terraform runs on. It has no remote-execution m
 | [`sysutils_user`](./docs/resources/user.md) | A local user via `useradd`/`usermod`/`userdel` | Yes, by name | uid, primary gid, home, shell; supplementary groups when `groups` is set | Yes |
 | [`sysutils_group`](./docs/resources/group.md) | A local group and its members via `groupadd`/`groupmod`/`gpasswd`/`groupdel` | Yes, by name | gid; members when `members` is set | Yes |
 | [`sysutils_systemd_unit`](./docs/resources/systemd_unit.md) | A systemd unit file in `/etc/systemd/system`, whether the unit is enabled and whether it is running | Yes, by unit name | Unit file content, enabled, running or stopped | Yes, and systemd as PID 1 |
+| [`sysutils_service`](./docs/resources/service.md) | Whether an existing service starts at boot and is running, with `systemctl` when systemd is PID 1 or `rc-service`/`rc-update` with OpenRC (Alpine); restarts it when values in `restart_on_change` change | Yes, by name | Enabled or disabled, started or stopped outside Terraform; service removed | Yes, and systemd or OpenRC as init system |
 | [`sysutils_mount`](./docs/resources/mount.md) | A file system mount and its `/etc/fstab` entry, like Ansible's `mount` module | Yes, by mount point | fstab entry changed or missing; unmounted, a different device or type mounted, or writable although `ro` is set | Yes |
 | [`sysutils_sysctl`](./docs/resources/sysctl.md) | A kernel parameter in `/proc/sys` and its `sysctl.d` entry, like `sysctl -w` or Ansible's `sysctl` module | Yes, by name or `name:file` | Running value changed; `sysctl.d` entry missing or changed | Yes |
 | [`sysutils_kernel_module`](./docs/resources/kernel_module.md) | A kernel module loaded with `modprobe`, its parameters, and its `modules-load.d` and `modprobe.d` files | Yes, by name (must be loaded) | Module unloaded; configuration files missing or changed | Yes, with `CAP_SYS_MODULE` |
@@ -60,7 +61,7 @@ provider "sysutils" {
 }
 ```
 
-Symlinks in the tree are resolved inside it: absolute link targets are relative to `root_dir`, and a link that leads above `root_dir` is an error. The mount, sysctl, kernel module and package resources change the running host and refuse to plan with `root_dir` set, as does `sysutils_package_repository` with `refresh_cache = true`. See [Root Directory](./docs/index.md#root-directory).
+Symlinks in the tree are resolved inside it: absolute link targets are relative to `root_dir`, and a link that leads above `root_dir` is an error. The mount, sysctl, kernel module, service and package resources change the running host and refuse to plan with `root_dir` set, as does `sysutils_package_repository` with `refresh_cache = true`. See [Root Directory](./docs/index.md#root-directory).
 
 ### Requirements
 
@@ -124,7 +125,7 @@ The [service account guide](./docs/guides/service-account.md) walks through a co
 
 - [Provider overview and security model](./docs/index.md)
 - [Guide: provisioning a service account and its files](./docs/guides/service-account.md)
-- Resources: [`sysutils_file`](./docs/resources/file.md), [`sysutils_file_line`](./docs/resources/file_line.md), [`sysutils_ini_value`](./docs/resources/ini_value.md), [`sysutils_template_file`](./docs/resources/template_file.md), [`sysutils_directory`](./docs/resources/directory.md), [`sysutils_symlink`](./docs/resources/symlink.md), [`sysutils_user`](./docs/resources/user.md), [`sysutils_group`](./docs/resources/group.md), [`sysutils_systemd_unit`](./docs/resources/systemd_unit.md), [`sysutils_mount`](./docs/resources/mount.md), [`sysutils_sysctl`](./docs/resources/sysctl.md), [`sysutils_kernel_module`](./docs/resources/kernel_module.md), [`sysutils_cron_job`](./docs/resources/cron_job.md), [`sysutils_package`](./docs/resources/package.md), [`sysutils_package_repository`](./docs/resources/package_repository.md), [`sysutils_exec`](./docs/resources/exec.md)
+- Resources: [`sysutils_file`](./docs/resources/file.md), [`sysutils_file_line`](./docs/resources/file_line.md), [`sysutils_ini_value`](./docs/resources/ini_value.md), [`sysutils_template_file`](./docs/resources/template_file.md), [`sysutils_directory`](./docs/resources/directory.md), [`sysutils_symlink`](./docs/resources/symlink.md), [`sysutils_user`](./docs/resources/user.md), [`sysutils_group`](./docs/resources/group.md), [`sysutils_systemd_unit`](./docs/resources/systemd_unit.md), [`sysutils_service`](./docs/resources/service.md), [`sysutils_mount`](./docs/resources/mount.md), [`sysutils_sysctl`](./docs/resources/sysctl.md), [`sysutils_kernel_module`](./docs/resources/kernel_module.md), [`sysutils_cron_job`](./docs/resources/cron_job.md), [`sysutils_package`](./docs/resources/package.md), [`sysutils_package_repository`](./docs/resources/package_repository.md), [`sysutils_exec`](./docs/resources/exec.md)
 - Data sources: [`sysutils_file`](./docs/data-sources/file.md), [`sysutils_directory`](./docs/data-sources/directory.md), [`sysutils_user`](./docs/data-sources/user.md), [`sysutils_group`](./docs/data-sources/group.md)
 - [Examples](./examples), including [`examples/complete`](./examples/complete), a whole service host in one stack
 

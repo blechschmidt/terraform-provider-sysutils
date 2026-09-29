@@ -642,6 +642,22 @@ resource "sysutils_systemd_unit" "test" {
 	})
 }
 
+func TestAccUpgradeLocal_service(t *testing.T) {
+	requireSystemd(t)
+	name := installTestUnit(t)
+	resource.Test(t, resource.TestCase{
+		Steps: localUpgradeSteps(t, "sysutils_service", fmt.Sprintf(`
+resource "sysutils_service" "test" {
+  name              = %q
+  enabled           = true
+  state             = "running"
+  restart_on_change = { config = "v1" }
+  timeout           = "30s"
+}
+`, name)),
+	})
+}
+
 func TestAccUpgradeLocal_mount(t *testing.T) {
 	env := newMountAccEnv(t)
 	// persist = false: the baseline build can't be pointed at a temporary

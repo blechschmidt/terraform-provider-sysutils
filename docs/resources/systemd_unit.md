@@ -10,7 +10,7 @@ description: |-
 
 Manages a systemd unit: writes its unit file to `/etc/systemd/system`, runs `systemctl daemon-reload` when the file changes, and optionally enables and starts or stops the unit. On destroy the unit is stopped and disabled, and its file is removed. Requires root privileges and a host booted with systemd.
 
-Use it for units that you define yourself. To change a unit that a package installed, manage a drop-in file such as `/etc/systemd/system/ssh.service.d/override.conf` with [`sysutils_file`](./file.md) and reload or restart the unit with [`sysutils_exec`](./exec.md).
+Use it for units that you define yourself. To change a unit that a package installed, manage a drop-in file such as `/etc/systemd/system/ssh.service.d/override.conf` with [`sysutils_file`](./file.md) and restart the unit with the `restart_on_change` of a [`sysutils_service`](./service.md), which reloads systemd first. `sysutils_service` also manages whether units that a package installed are enabled and running.
 
 ## Example Usage
 
