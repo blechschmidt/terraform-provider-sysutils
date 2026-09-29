@@ -28,6 +28,8 @@ The `sysutils` provider exposes a small set of primitives for host-level adminis
 
 It is intended for small bootstrapping tasks where installing and configuring something like Ansible or a full configuration-management system would be overkill.
 
+For a complete example that combines a service user, group, directory tree, configuration file and symlink, see the [service account guide](./guides/service-account.md).
+
 ## Example Usage
 
 {{ tffile "examples/provider/provider.tf" }}
