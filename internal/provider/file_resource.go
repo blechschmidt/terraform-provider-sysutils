@@ -36,25 +36,27 @@ var (
 	_ resource.ResourceWithImportState      = (*fileResource)(nil)
 	_ resource.ResourceWithConfigValidators = (*fileResource)(nil)
 	_ resource.ResourceWithModifyPlan       = (*fileResource)(nil)
+	_ resource.ResourceWithConfigure        = (*fileResource)(nil)
 )
 
 const defaultFileMode = "0644"
 
 func NewFileResource() resource.Resource { return &fileResource{} }
 
-type fileResource struct{}
+type fileResource struct{ rootedResource }
 
 type fileModel struct {
-	Path          types.String `tfsdk:"path"`
-	Content       types.String `tfsdk:"content"`
-	ContentBase64 types.String `tfsdk:"content_base64"`
-	Source        types.String `tfsdk:"source"`
-	ContentSHA256 types.String `tfsdk:"content_sha256"`
-	ContentMD5    types.String `tfsdk:"content_md5"`
-	Mode          types.String `tfsdk:"mode"`
-	Owner         types.String `tfsdk:"owner"`
-	Group         types.String `tfsdk:"group"`
-	ID            types.String `tfsdk:"id"`
+	Path             types.String `tfsdk:"path"`
+	Content          types.String `tfsdk:"content"`
+	SensitiveContent types.String `tfsdk:"sensitive_content"`
+	ContentBase64    types.String `tfsdk:"content_base64"`
+	Source           types.String `tfsdk:"source"`
+	ContentSHA256    types.String `tfsdk:"content_sha256"`
+	ContentMD5       types.String `tfsdk:"content_md5"`
+	Mode             types.String `tfsdk:"mode"`
+	Owner            types.String `tfsdk:"owner"`
+	Group            types.String `tfsdk:"group"`
+	ID               types.String `tfsdk:"id"`
 }
 
 func (r *fileResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -63,7 +65,7 @@ func (r *fileResource) Metadata(_ context.Context, req resource.MetadataRequest,
 
 func (r *fileResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		MarkdownDescription: "Writes a file at `path` whose contents come from exactly one of `content` (UTF-8 text), `content_base64` (binary data) or `source` (a local file to copy). " +
+		MarkdownDescription: "Writes a file at `path` whose contents come from exactly one of `content` (UTF-8 text), `sensitive_content` (UTF-8 text hidden from plans), `content_base64` (binary data) or `source` (a local file to copy). " +
 			"On create the provider also sets the requested `mode`, and optionally `owner` / `group` (which require privileges). " +
 			"On update, content, mode, and ownership are reconciled in-place. On destroy, the file is removed.",
 		Attributes: map[string]schema.Attribute{
@@ -76,20 +78,30 @@ func (r *fileResource) Schema(_ context.Context, _ resource.SchemaRequest, resp 
 				Validators:    []validator.String{absolutePath()},
 			},
 			"content": schema.StringAttribute{
-				Optional:            true,
-				MarkdownDescription: "File contents as UTF-8 text. Exactly one of `content`, `content_base64` and `source` must be set.",
+				Optional: true,
+				MarkdownDescription: "File contents as UTF-8 text. Exactly one of `content`, `sensitive_content`, `content_base64` and `source` must be set. " +
+					"If the file is changed outside Terraform, refresh records its actual text here, so the plan shows a line-by-line diff of the drift.",
+			},
+			"sensitive_content": schema.StringAttribute{
+				Optional:  true,
+				Sensitive: true,
+				MarkdownDescription: "Like `content`, for secrets: the value is marked sensitive, so plans show only `(sensitive value)` for it and a change is visible only through `content_sha256` and `content_md5`. " +
+					"Exactly one of `content`, `sensitive_content`, `content_base64` and `source` must be set. " +
+					"The value is still stored in the state in plain text.",
 			},
 			"content_base64": schema.StringAttribute{
 				Optional: true,
 				MarkdownDescription: "File contents as standard (padded) base64, for binary data. " +
 					"Use `filebase64()` or `base64encode()` to produce it. " +
-					"Exactly one of `content`, `content_base64` and `source` must be set.",
+					"Exactly one of `content`, `sensitive_content`, `content_base64` and `source` must be set. " +
+					"If the file is changed outside Terraform, refresh records the base64 encoding of its actual contents here, so the plan shows the drift.",
 				Validators: []validator.String{base64String()},
 			},
 			"source": schema.StringAttribute{
 				Optional: true,
-				MarkdownDescription: "Path to a local file to copy to `path`. Exactly one of `content`, `content_base64` and `source` must be set. " +
-					"Relative paths are resolved against Terraform's working directory; prefer `${path.module}/...`. " +
+				MarkdownDescription: "Path to a local file to copy to `path`. Exactly one of `content`, `sensitive_content`, `content_base64` and `source` must be set. " +
+					"Relative paths are resolved against Terraform's working directory; prefer `${path.module}/...`. The provider's `root_dir` does not apply to `source`. " +
+					"Its contents are not stored in the state, so plans show changes only through `content_sha256` and `content_md5`. " +
 					"The source is read and hashed during every plan, so a change to its contents plans an update even if the configuration is unchanged. " +
 					"Symlinks are followed for `source`, but it must resolve to a regular file. " +
 					"If the source does not exist at plan time (for example because another resource creates it in the same apply), the checksums are unknown until apply.",
@@ -141,6 +153,7 @@ func (r *fileResource) ConfigValidators(_ context.Context) []resource.ConfigVali
 	return []resource.ConfigValidator{
 		resourcevalidator.ExactlyOneOf(
 			path.MatchRoot("content"),
+			path.MatchRoot("sensitive_content"),
 			path.MatchRoot("content_base64"),
 			path.MatchRoot("source"),
 		),
@@ -181,10 +194,14 @@ func (r *fileResource) Create(ctx context.Context, req resource.CreateRequest, r
 		return
 	}
 
-	target := plan.Path.ValueString()
 	// Config validation already enforces this; re-check as defense in depth.
-	if err := validateAbsolutePath(target); err != nil {
+	if err := validateAbsolutePath(plan.Path.ValueString()); err != nil {
 		resp.Diagnostics.AddAttributeError(path.Root("path"), "Invalid path", capitalize(err.Error())+".")
+		return
+	}
+	target, diags := resolvePathAttr(r.root(), plan.Path.ValueString(), false)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
 		return
 	}
 	mode, err := parseMode(plan.Mode.ValueString())
@@ -229,7 +246,12 @@ func (r *fileResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 		return
 	}
 
-	found, diags := readFile(state.Path.ValueString(), &state)
+	target, diags := resolvePathAttr(r.root(), state.Path.ValueString(), false)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	found, diags := readFile(target, &state)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -249,7 +271,11 @@ func (r *fileResource) Update(ctx context.Context, req resource.UpdateRequest, r
 		return
 	}
 
-	target := plan.Path.ValueString()
+	target, diags := resolvePathAttr(r.root(), plan.Path.ValueString(), false)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
 	mode, err := parseMode(plan.Mode.ValueString())
 	if err != nil {
 		resp.Diagnostics.AddAttributeError(path.Root("mode"), "Invalid mode", err.Error())
@@ -292,10 +318,14 @@ func (r *fileResource) Delete(ctx context.Context, req resource.DeleteRequest, r
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	target := state.Path.ValueString()
 	// State is not validated by the schema; never act on an invalid path.
-	if err := validateAbsolutePath(target); err != nil {
+	if err := validateAbsolutePath(state.Path.ValueString()); err != nil {
 		resp.Diagnostics.AddError("Refusing to remove file", capitalize(err.Error())+".")
+		return
+	}
+	target, diags := resolvePathAttr(r.root(), state.Path.ValueString(), false)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
 		return
 	}
 	// unlink never follows symlinks and never removes directories, unlike
@@ -366,6 +396,8 @@ func writeDesiredContent(target string, m *fileModel, mode fs.FileMode, owner, g
 	switch {
 	case !m.Content.IsNull():
 		return writeFile(target, strings.NewReader(m.Content.ValueString()), mode, owner, group)
+	case !m.SensitiveContent.IsNull():
+		return writeFile(target, strings.NewReader(m.SensitiveContent.ValueString()), mode, owner, group)
 	case !m.ContentBase64.IsNull():
 		data, err := base64.StdEncoding.DecodeString(m.ContentBase64.ValueString())
 		if err != nil {
@@ -380,7 +412,7 @@ func writeDesiredContent(target string, m *fileModel, mode fs.FileMode, owner, g
 		defer func() { _ = src.Close() }()
 		return writeFile(target, src, mode, owner, group)
 	default:
-		return checksums{}, errors.New("one of content, content_base64 or source must be set")
+		return checksums{}, errors.New("one of content, sensitive_content, content_base64 or source must be set")
 	}
 }
 
@@ -462,10 +494,13 @@ func openSource(p string) (*os.File, error) {
 // same apply).
 func desiredChecksums(m *fileModel) (sums checksums, known bool, err error) {
 	switch {
-	case m.Content.IsUnknown() || m.ContentBase64.IsUnknown() || m.Source.IsUnknown():
+	case m.Content.IsUnknown() || m.SensitiveContent.IsUnknown() || m.ContentBase64.IsUnknown() || m.Source.IsUnknown():
 		return checksums{}, false, nil
 	case !m.Content.IsNull():
 		sums, err = checksumReader(strings.NewReader(m.Content.ValueString()))
+		return sums, err == nil, err
+	case !m.SensitiveContent.IsNull():
+		sums, err = checksumReader(strings.NewReader(m.SensitiveContent.ValueString()))
 		return sums, err == nil, err
 	case !m.ContentBase64.IsNull():
 		data, err := base64.StdEncoding.DecodeString(m.ContentBase64.ValueString())
@@ -497,6 +532,8 @@ func desiredChecksums(m *fileModel) (sums checksums, known bool, err error) {
 // m, for attaching diagnostics.
 func contentAttribute(m *fileModel) path.Path {
 	switch {
+	case !m.SensitiveContent.IsNull():
+		return path.Root("sensitive_content")
 	case !m.ContentBase64.IsNull():
 		return path.Root("content_base64")
 	case !m.Source.IsNull():
@@ -518,6 +555,28 @@ func checkRegularFile(target string, info fs.FileInfo) error {
 	return nil
 }
 
+// refreshContent records the file content read from disk in whichever
+// content attribute m uses; see readFile.
+func refreshContent(m *fileModel, content []byte) {
+	// Terraform strings must be valid UTF-8.
+	text := utf8.Valid(content)
+	switch {
+	case !m.SensitiveContent.IsNull():
+		if text {
+			m.SensitiveContent = types.StringValue(string(content))
+		}
+	case !m.ContentBase64.IsNull():
+		prior, err := base64.StdEncoding.DecodeString(m.ContentBase64.ValueString())
+		if err != nil || !bytes.Equal(prior, content) {
+			m.ContentBase64 = types.StringValue(base64.StdEncoding.EncodeToString(content))
+		}
+	case text:
+		m.Content = types.StringValue(string(content))
+	case m.Content.IsNull():
+		m.ContentBase64 = types.StringValue(base64.StdEncoding.EncodeToString(content))
+	}
+}
+
 // readFile refreshes m's checksums, mode, owner, group and id from the file at
 // target. Configured values that are equivalent to the actual ones (e.g. "644"
 // vs "0644", or a numeric UID vs its username) are preserved to avoid spurious
@@ -527,8 +586,14 @@ func checkRegularFile(target string, info fs.FileInfo) error {
 //   - content: set to the file's text, so drift shows as a readable diff. If
 //     the file is no longer valid UTF-8, the prior value is kept and drift is
 //     detected through content_sha256 instead.
-//   - content_base64 or source: left untouched; drift is detected by comparing
-//     content_sha256 with the checksum computed during plan.
+//   - sensitive_content: the same, but Terraform hides the value, so drift
+//     is visible only through content_sha256 and content_md5.
+//   - content_base64: set to the base64 encoding of the file, unless the
+//     prior value already decodes to the same bytes (it need not be the
+//     canonical encoding, and rewriting it would plan a spurious update).
+//   - source: left untouched; the source's contents are never stored, and
+//     drift is detected by comparing content_sha256 with the checksum
+//     computed during plan.
 //   - none (after import): content if the file is UTF-8 text, otherwise
 //     content_base64.
 func readFile(target string, m *fileModel) (found bool, diags diag.Diagnostics) {
@@ -567,7 +632,7 @@ func readFile(target string, m *fileModel) (found bool, diags diag.Diagnostics) 
 		return true, diags
 	}
 	var sums checksums
-	if m.ContentBase64.IsNull() && m.Source.IsNull() {
+	if m.Source.IsNull() {
 		content, err := io.ReadAll(f)
 		if err != nil {
 			diags.AddError("Read failed", err.Error())
@@ -577,13 +642,7 @@ func readFile(target string, m *fileModel) (found bool, diags diag.Diagnostics) 
 			diags.AddError("Read failed", err.Error())
 			return false, diags
 		}
-		// Terraform strings must be valid UTF-8.
-		switch {
-		case utf8.Valid(content):
-			m.Content = types.StringValue(string(content))
-		case m.Content.IsNull():
-			m.ContentBase64 = types.StringValue(base64.StdEncoding.EncodeToString(content))
-		}
+		refreshContent(m, content)
 	} else if sums, err = checksumReader(f); err != nil {
 		diags.AddError("Read failed", err.Error())
 		return false, diags

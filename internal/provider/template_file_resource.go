@@ -32,11 +32,12 @@ var (
 	_ resource.ResourceWithImportState    = (*templateFileResource)(nil)
 	_ resource.ResourceWithValidateConfig = (*templateFileResource)(nil)
 	_ resource.ResourceWithModifyPlan     = (*templateFileResource)(nil)
+	_ resource.ResourceWithConfigure      = (*templateFileResource)(nil)
 )
 
 func NewTemplateFileResource() resource.Resource { return &templateFileResource{} }
 
-type templateFileResource struct{}
+type templateFileResource struct{ rootedResource }
 
 type templateFileModel struct {
 	Path              types.String  `tfsdk:"path"`
@@ -246,10 +247,14 @@ func (r *templateFileResource) Create(ctx context.Context, req resource.CreateRe
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	target := plan.Path.ValueString()
 	// Config validation already enforces this; re-check as defense in depth.
-	if err := validateAbsolutePath(target); err != nil {
+	if err := validateAbsolutePath(plan.Path.ValueString()); err != nil {
 		resp.Diagnostics.AddAttributeError(path.Root("path"), "Invalid path", capitalize(err.Error())+".")
+		return
+	}
+	target, diags := resolvePathAttr(r.root(), plan.Path.ValueString(), false)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
 		return
 	}
 	if err := os.MkdirAll(filepath.Dir(target), 0o755); err != nil {
@@ -258,7 +263,7 @@ func (r *templateFileResource) Create(ctx context.Context, req resource.CreateRe
 	}
 	// Owner and group are unknown when not configured; ValueString returns ""
 	// for unknown values, meaning "leave unchanged".
-	resp.Diagnostics.Append(r.apply(ctx, &plan, plan.Owner.ValueString(), plan.Group.ValueString())...)
+	resp.Diagnostics.Append(r.apply(ctx, target, &plan, plan.Owner.ValueString(), plan.Group.ValueString())...)
 	if plan.ID.IsUnknown() {
 		return // The file was not written, or could not be refreshed.
 	}
@@ -273,7 +278,12 @@ func (r *templateFileResource) Read(ctx context.Context, req resource.ReadReques
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	found, diags := refreshTemplateFile(&state)
+	target, diags := resolvePathAttr(r.root(), state.Path.ValueString(), false)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	found, diags := refreshTemplateFile(target, &state)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -292,6 +302,11 @@ func (r *templateFileResource) Update(ctx context.Context, req resource.UpdateRe
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	target, diags := resolvePathAttr(r.root(), plan.Path.ValueString(), false)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
 	// Only chown what actually changed, so that an unrelated update does not
 	// require the privileges needed to (re)assign ownership.
 	var owner, group string
@@ -303,7 +318,7 @@ func (r *templateFileResource) Update(ctx context.Context, req resource.UpdateRe
 	}
 	// apply leaves the id unknown unless the file was written and refreshed.
 	plan.ID = types.StringUnknown()
-	resp.Diagnostics.Append(r.apply(ctx, &plan, owner, group)...)
+	resp.Diagnostics.Append(r.apply(ctx, target, &plan, owner, group)...)
 	if plan.ID.IsUnknown() {
 		return
 	}
@@ -316,10 +331,14 @@ func (r *templateFileResource) Delete(ctx context.Context, req resource.DeleteRe
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	target := state.Path.ValueString()
 	// State is not validated by the schema; never act on an invalid path.
-	if err := validateAbsolutePath(target); err != nil {
+	if err := validateAbsolutePath(state.Path.ValueString()); err != nil {
 		resp.Diagnostics.AddError("Refusing to remove file", capitalize(err.Error())+".")
+		return
+	}
+	target, diags := resolvePathAttr(r.root(), state.Path.ValueString(), false)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
 		return
 	}
 	// unlink never follows symlinks and never removes directories.
@@ -342,13 +361,12 @@ func (r *templateFileResource) ImportState(ctx context.Context, req resource.Imp
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), req.ID)...)
 }
 
-// apply renders plan, writes the file if its content differs from the
+// apply renders plan, writes the file at the host path target if its content differs from the
 // rendered output, applies mode and ownership (empty owner or group leave
 // them unchanged), and refreshes plan from the file. plan.ID stays unknown
 // unless the refresh succeeded, so callers must leave it unknown beforehand.
-func (r *templateFileResource) apply(ctx context.Context, plan *templateFileModel, owner, group string) diag.Diagnostics {
+func (r *templateFileResource) apply(ctx context.Context, target string, plan *templateFileModel, owner, group string) diag.Diagnostics {
 	var diags diag.Diagnostics
-	target := plan.Path.ValueString()
 	mode, err := parseMode(plan.Mode.ValueString())
 	if err != nil {
 		diags.AddAttributeError(path.Root("mode"), "Invalid mode", err.Error())
@@ -386,7 +404,7 @@ func (r *templateFileResource) apply(ctx context.Context, plan *templateFileMode
 		return diags
 	}
 
-	found, d := refreshTemplateFile(plan)
+	found, d := refreshTemplateFile(target, plan)
 	diags.Append(d...)
 	if !found && !diags.HasError() {
 		diags.AddError("Writing file", fmt.Sprintf("File %q disappeared immediately after it was written.", target))
@@ -526,7 +544,7 @@ func openRegularNoFollow(target string, flag int) (*os.File, error) {
 }
 
 // refreshTemplateFile refreshes m's checksums, mode, owner, group and id from
-// the file at m.Path. It reports found=false if the file does not exist.
+// the file at the host path target. It reports found=false if the file does not exist.
 //
 // If the file is valid UTF-8 and not larger than maxRenderedSize, its content
 // is recorded in whichever of rendered and rendered_sensitive is in use, so
@@ -534,8 +552,7 @@ func openRegularNoFollow(target string, flag int) (*os.File, error) {
 // neither is in use and only the checksums are recorded, so that the content
 // of a file that may contain secrets is not put into a non-sensitive
 // attribute. Drift is always detected through content_sha256.
-func refreshTemplateFile(m *templateFileModel) (found bool, diags diag.Diagnostics) {
-	target := m.Path.ValueString()
+func refreshTemplateFile(target string, m *templateFileModel) (found bool, diags diag.Diagnostics) {
 	f, err := openRegularNoFollow(target, os.O_RDONLY)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):

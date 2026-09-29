@@ -69,7 +69,7 @@ output "latest_release" {
 
 ### Required
 
-- `path` (String) Absolute path of the directory to read. Must be in canonical form (no `.`/`..` segments, duplicate or trailing slashes). Unlike the resources, `/` is allowed. Symlinks are followed.
+- `path` (String) Absolute path of the directory to read. Must be in canonical form (no `.`/`..` segments, duplicate or trailing slashes). Unlike the resources, `/` is allowed. Symlinks are followed; if the provider's `root_dir` is set, they are resolved inside it, and a link leading above `root_dir` is an error.
 
 ### Read-Only
 

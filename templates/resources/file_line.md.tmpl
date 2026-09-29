@@ -60,6 +60,8 @@ On refresh, the provider reads the file and looks for the managed content:
 - If the managed line or block is missing, or the file was deleted, the resource is removed from state and the next plan shows it being created again.
 - If the content between the block markers, or the line selected by `regexp`, was changed, the actual content is recorded in state. The plan then shows an in-place update from the actual to the configured value.
 
+`content_sha256` holds the checksum of the managed line or block (including its marker lines) as found in the file, and the plan computes it from the configuration. If `line` or `block` comes from a sensitive variable, Terraform hides its value in the plan, and the change of `content_sha256` is what shows that the content will change.
+
 Changes to `regexp`, `insert_after`, `insert_before` or `create` alone don't move content that is already present.
 
 ## Destroy
@@ -76,7 +78,7 @@ The path ends at the first colon, so files whose path contains a colon cannot be
 
 ## Caveats
 
-- Consistent with the provider's [security model](../index.md#security-model), a symlink at `path` is refused, and so is anything else that is not a regular file. Symlinks in the parent components of `path` are followed. If the file is replaced by a symlink after creation, refresh fails and the symlink's target is never modified. On destroy, a symlink or other non-regular file at `path` is left untouched, with a warning.
+- Consistent with the provider's [security model](../index.md#security-model), a symlink at `path` is refused, and so is anything else that is not a regular file. Symlinks in the parent components of `path` are followed (inside the root if the provider's [`root_dir`](../index.md#root-directory) is set). If the file is replaced by a symlink after creation, refresh fails and the symlink's target is never modified. On destroy, a symlink or other non-regular file at `path` is left untouched, with a warning.
 - The rename gives the file a new inode, which breaks hard links. Extended attributes, ACLs and the SELinux label are copied to the new file, except file capabilities (`security.capability`), which the kernel also drops whenever file content changes. If an attribute cannot be copied, the edit fails rather than drop it. If `path` is a mount point, as a bind-mounted `/etc/hosts` in a container is, the rename fails with `EBUSY`. In that case, and only then, the file is rewritten in place, which is not atomic.
 - Preserving an owner other than the user running Terraform requires the privileges to `chown` the replacement file, normally root.
 - The lock that serialises edits only covers this provider. Other tools editing the file at the same time are only detected by the check before the rename, and a `sysutils_file` managing the same file conflicts with this resource.

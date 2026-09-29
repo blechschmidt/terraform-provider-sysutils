@@ -22,6 +22,8 @@ import (
 var (
 	_ resource.Resource                = (*symlinkResource)(nil)
 	_ resource.ResourceWithImportState = (*symlinkResource)(nil)
+	_ resource.ResourceWithConfigure   = (*symlinkResource)(nil)
+	_ resource.ResourceWithModifyPlan  = (*symlinkResource)(nil)
 )
 
 // maxTempLinkAttempts bounds the retries when a randomly named temporary
@@ -30,7 +32,7 @@ const maxTempLinkAttempts = 5
 
 func NewSymlinkResource() resource.Resource { return &symlinkResource{} }
 
-type symlinkResource struct{}
+type symlinkResource struct{ rootedResource }
 
 type symlinkModel struct {
 	Path   types.String `tfsdk:"path"`
@@ -62,6 +64,7 @@ func (r *symlinkResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 				MarkdownDescription: "Path the link points to, stored verbatim. " +
 					"May be absolute or relative; relative targets are resolved by the kernel against the link's directory. " +
 					"The target does not need to exist. Must not be empty or contain NUL bytes. " +
+					"If the provider's `root_dir` is set, an absolute target is relative to `root_dir` (as in a chroot), and a relative target that leads above `root_dir` is refused at plan time. " +
 					"Changing this replaces the link atomically in place.",
 				Validators: []validator.String{symlinkTarget()},
 			},
@@ -89,6 +92,22 @@ func (r *symlinkResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 	}
 }
 
+// ModifyPlan refuses, when root_dir is set, a target that would lead out of
+// the root, so that the mistake is reported by plan rather than apply.
+func (r *symlinkResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
+	if req.Plan.Raw.IsNull() || r.root().isHost() {
+		return
+	}
+	var plan symlinkModel
+	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
+	if resp.Diagnostics.HasError() || plan.Path.IsUnknown() || plan.Target.IsUnknown() {
+		return
+	}
+	if err := r.root().checkSymlinkTargetInRoot(plan.Path.ValueString(), plan.Target.ValueString()); err != nil {
+		resp.Diagnostics.AddAttributeError(path.Root("target"), "Invalid target", capitalize(err.Error())+".")
+	}
+}
+
 func (r *symlinkResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
 	var plan symlinkModel
 	resp.Diagnostics.Append(req.Plan.Get(ctx, &plan)...)
@@ -96,15 +115,19 @@ func (r *symlinkResource) Create(ctx context.Context, req resource.CreateRequest
 		return
 	}
 
-	link := plan.Path.ValueString()
 	target := plan.Target.ValueString()
 	// Config validation already enforces these; re-check as defense in depth.
-	if err := validateAbsolutePath(link); err != nil {
+	if err := validateAbsolutePath(plan.Path.ValueString()); err != nil {
 		resp.Diagnostics.AddAttributeError(path.Root("path"), "Invalid path", capitalize(err.Error())+".")
 		return
 	}
-	if err := validateSymlinkTarget(target); err != nil {
+	if err := r.validateTarget(plan.Path.ValueString(), target); err != nil {
 		resp.Diagnostics.AddAttributeError(path.Root("target"), "Invalid target", capitalize(err.Error())+".")
+		return
+	}
+	link, diags := resolvePathAttr(r.root(), plan.Path.ValueString(), false)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
 		return
 	}
 
@@ -139,7 +162,12 @@ func (r *symlinkResource) Read(ctx context.Context, req resource.ReadRequest, re
 		return
 	}
 
-	found, diags := readSymlink(state.Path.ValueString(), &state)
+	link, diags := resolvePathAttr(r.root(), state.Path.ValueString(), false)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	found, diags := readSymlink(link, &state)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -158,10 +186,14 @@ func (r *symlinkResource) Update(ctx context.Context, req resource.UpdateRequest
 		return
 	}
 
-	link := plan.Path.ValueString()
 	target := plan.Target.ValueString()
-	if err := validateSymlinkTarget(target); err != nil {
+	if err := r.validateTarget(plan.Path.ValueString(), target); err != nil {
 		resp.Diagnostics.AddAttributeError(path.Root("target"), "Invalid target", capitalize(err.Error())+".")
+		return
+	}
+	link, diags := resolvePathAttr(r.root(), plan.Path.ValueString(), false)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
 		return
 	}
 
@@ -203,10 +235,14 @@ func (r *symlinkResource) Delete(ctx context.Context, req resource.DeleteRequest
 		return
 	}
 
-	link := state.Path.ValueString()
 	// State is not validated by the schema; never act on an invalid path.
-	if err := validateAbsolutePath(link); err != nil {
+	if err := validateAbsolutePath(state.Path.ValueString()); err != nil {
 		resp.Diagnostics.AddError("Refusing to remove symlink", capitalize(err.Error())+".")
+		return
+	}
+	link, diags := resolvePathAttr(r.root(), state.Path.ValueString(), false)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
 		return
 	}
 	info, err := os.Lstat(link)
@@ -239,6 +275,15 @@ func (r *symlinkResource) ImportState(ctx context.Context, req resource.ImportSt
 	}
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("path"), req.ID)...)
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), req.ID)...)
+}
+
+// validateTarget checks the symlink target of the link at the managed path
+// link, including that it stays inside root_dir.
+func (r *symlinkResource) validateTarget(link, target string) error {
+	if err := validateSymlinkTarget(target); err != nil {
+		return err
+	}
+	return r.root().checkSymlinkTargetInRoot(link, target)
 }
 
 // replaceSymlink atomically points link at target: a new symlink is created

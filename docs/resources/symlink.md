@@ -52,7 +52,7 @@ resource "sysutils_symlink" "config" {
 ### Required
 
 - `path` (String) Absolute path of the symbolic link. Must be in canonical form (no `.`/`..` segments, duplicate or trailing slashes) and must not be `/`. Missing parent directories are created with mode `0755`. Changing this forces a new resource.
-- `target` (String) Path the link points to, stored verbatim. May be absolute or relative; relative targets are resolved by the kernel against the link's directory. The target does not need to exist. Must not be empty or contain NUL bytes. Changing this replaces the link atomically in place.
+- `target` (String) Path the link points to, stored verbatim. May be absolute or relative; relative targets are resolved by the kernel against the link's directory. The target does not need to exist. Must not be empty or contain NUL bytes. If the provider's `root_dir` is set, an absolute target is relative to `root_dir` (as in a chroot), and a relative target that leads above `root_dir` is refused at plan time. Changing this replaces the link atomically in place.
 
 ### Optional
 

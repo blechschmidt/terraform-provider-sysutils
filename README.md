@@ -45,7 +45,15 @@ terraform {
 provider "sysutils" {}
 ```
 
-The provider takes no configuration arguments.
+The only provider argument is the optional `root_dir`. It makes the file, file line, template file, directory and symlink resources and the file and directory data sources work inside a directory tree, as if in a chroot, for example to build a container root filesystem:
+
+```terraform
+provider "sysutils" {
+  root_dir = "/srv/images/web/rootfs" # "/etc/hosts" means /srv/images/web/rootfs/etc/hosts
+}
+```
+
+Symlinks in the tree are resolved inside it: absolute link targets are relative to `root_dir`, and a link that leads above `root_dir` is an error. See [Root Directory](./docs/index.md#root-directory).
 
 ### Requirements
 
@@ -125,12 +133,13 @@ A local user who can write to a directory above a managed path could try to plan
 - The `sysutils_file` data source refuses to read through a symlink unless `follow_symlinks = true`.
 - Recursive operations (`force_destroy`, `recursive_owner`, `recursive_mode`) never follow symlinks inside the tree and never cross into another mounted filesystem. `force_destroy` also refuses to run if any component of the path is a symlink.
 - Symlinks in the *parent* components of a path are followed for ordinary operations, so paths under `/var/run` and similar keep working. **Every ancestor directory of a managed path must be writable only by trusted users.** Avoid managing paths inside world-writable directories such as `/tmp` as root.
+- With `root_dir` set, the provider resolves every path component itself, treats absolute link targets as relative to `root_dir`, and rejects any symlink that leads above it, so an untrusted tree (for example an unpacked image) cannot redirect it to the host.
 
 ### Content in state
 
 Terraform state holds every attribute in plain text, and so does anything that has read access to your state backend.
 
-- `sysutils_file` stores `content` and `content_base64` verbatim. For `source`, only the path and checksums are stored.
+- `sysutils_file` stores `content`, `sensitive_content` and `content_base64` verbatim. `sensitive_content` is hidden in plans, which show only the change of `content_sha256`. For `source`, only the path and checksums are stored.
 - The `sysutils_file` data source stores the file's contents. Don't point it at secrets.
 - `sysutils_file_line` stores the managed line or block.
 - `sysutils_template_file` stores the template, its variables and the rendered content. With `sensitive_vars`, the rendered content goes into the sensitive `rendered_sensitive` attribute, so it's hidden in plans, but it is still in state.

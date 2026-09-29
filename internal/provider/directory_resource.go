@@ -25,6 +25,7 @@ var (
 	_ resource.Resource                   = (*directoryResource)(nil)
 	_ resource.ResourceWithImportState    = (*directoryResource)(nil)
 	_ resource.ResourceWithValidateConfig = (*directoryResource)(nil)
+	_ resource.ResourceWithConfigure      = (*directoryResource)(nil)
 )
 
 const (
@@ -36,7 +37,7 @@ const (
 
 func NewDirectoryResource() resource.Resource { return &directoryResource{} }
 
-type directoryResource struct{}
+type directoryResource struct{ rootedResource }
 
 type directoryModel struct {
 	Path          types.String `tfsdk:"path"`
@@ -187,10 +188,14 @@ func (r *directoryResource) Create(ctx context.Context, req resource.CreateReque
 		return
 	}
 
-	target := plan.Path.ValueString()
 	// Config validation already enforces this; re-check as defense in depth.
-	if err := validateAbsolutePath(target); err != nil {
+	if err := validateAbsolutePath(plan.Path.ValueString()); err != nil {
 		resp.Diagnostics.AddAttributeError(path.Root("path"), "Invalid path", capitalize(err.Error())+".")
+		return
+	}
+	target, diags := resolvePathAttr(r.root(), plan.Path.ValueString(), false)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
 		return
 	}
 	mode, err := parseMode(plan.Mode.ValueString())
@@ -240,7 +245,12 @@ func (r *directoryResource) Read(ctx context.Context, req resource.ReadRequest, 
 	// is reported through the mode attribute.
 	appliedMode, appliedFileMode := knownString(state.Mode), knownString(state.FileMode)
 
-	found, diags := readDirectory(state.Path.ValueString(), &state)
+	target, diags := resolvePathAttr(r.root(), state.Path.ValueString(), false)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	found, diags := readDirectory(target, &state)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -269,7 +279,7 @@ func (r *directoryResource) Read(ctx context.Context, req resource.ReadRequest, 
 		resp.Diagnostics.AddError("Invalid mode in state", err.Error())
 		return
 	}
-	n, err := conformTree(ctx, state.Path.ValueString(), spec, false)
+	n, err := conformTree(ctx, target, spec, false)
 	if err != nil {
 		resp.Diagnostics.AddAttributeError(path.Root("path"), "Inspecting directory contents", capitalize(err.Error())+".")
 		return
@@ -286,7 +296,11 @@ func (r *directoryResource) Update(ctx context.Context, req resource.UpdateReque
 		return
 	}
 
-	target := plan.Path.ValueString()
+	target, diags := resolvePathAttr(r.root(), plan.Path.ValueString(), false)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
 	mode, err := parseMode(plan.Mode.ValueString())
 	if err != nil {
 		resp.Diagnostics.AddAttributeError(path.Root("mode"), "Invalid mode", err.Error())
@@ -333,11 +347,15 @@ func (r *directoryResource) Delete(ctx context.Context, req resource.DeleteReque
 		return
 	}
 
-	target := state.Path.ValueString()
 	// State is not validated by the schema; never act on an empty, relative,
 	// non-canonical or root path read from it.
-	if err := validateAbsolutePath(target); err != nil {
+	if err := validateAbsolutePath(state.Path.ValueString()); err != nil {
 		resp.Diagnostics.AddError("Refusing to remove directory", capitalize(err.Error())+".")
+		return
+	}
+	target, diags := resolvePathAttr(r.root(), state.Path.ValueString(), false)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
 		return
 	}
 
@@ -356,6 +374,12 @@ func (r *directoryResource) Delete(ctx context.Context, req resource.DeleteReque
 	}
 
 	if state.ForceDestroy.ValueBool() {
+		// removeAllNoFollow checks the host path; the path inside root_dir
+		// is held to the same list of protected directories.
+		if err := validateRecursivelyRemovable(state.Path.ValueString()); err != nil {
+			resp.Diagnostics.AddError("Removing directory", capitalize(err.Error())+".")
+			return
+		}
 		if err := removeAllNoFollow(target); err != nil {
 			resp.Diagnostics.AddError("Removing directory", capitalize(err.Error())+".")
 		}

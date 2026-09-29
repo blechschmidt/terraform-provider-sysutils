@@ -72,7 +72,7 @@ resource "sysutils_exec" "reload" {
 
 ### Optional
 
-- `follow_symlinks` (Boolean) If `true` and `path` is a symlink, read the file it points to; all attributes then describe the target, not the link. Defaults to `false`, in which case a symlink at `path` is an error.
+- `follow_symlinks` (Boolean) If `true` and `path` is a symlink, read the file it points to; all attributes then describe the target, not the link. Defaults to `false`, in which case a symlink at `path` is an error. If the provider's `root_dir` is set, the link is resolved inside it: absolute targets are relative to `root_dir`, and a link leading above `root_dir` is an error.
 
 ### Read-Only
 

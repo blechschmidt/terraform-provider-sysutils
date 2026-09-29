@@ -16,11 +16,14 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
-var _ datasource.DataSource = (*directoryDataSource)(nil)
+var (
+	_ datasource.DataSource              = (*directoryDataSource)(nil)
+	_ datasource.DataSourceWithConfigure = (*directoryDataSource)(nil)
+)
 
 func NewDirectoryDataSource() datasource.DataSource { return &directoryDataSource{} }
 
-type directoryDataSource struct{}
+type directoryDataSource struct{ rootedDataSource }
 
 type directoryDataSourceModel struct {
 	Path    types.String `tfsdk:"path"`
@@ -47,7 +50,7 @@ func (d *directoryDataSource) Schema(_ context.Context, _ datasource.SchemaReque
 				Required: true,
 				MarkdownDescription: "Absolute path of the directory to read. " +
 					"Must be in canonical form (no `.`/`..` segments, duplicate or trailing slashes). " +
-					"Unlike the resources, `/` is allowed. Symlinks are followed.",
+					"Unlike the resources, `/` is allowed. Symlinks are followed; if the provider's `root_dir` is set, they are resolved inside it, and a link leading above `root_dir` is an error.",
 				Validators: []validator.String{absolutePathOrRoot()},
 			},
 			"exists": schema.BoolAttribute{
@@ -97,10 +100,15 @@ func (d *directoryDataSource) Read(ctx context.Context, req datasource.ReadReque
 		return
 	}
 
-	target := cfg.Path.ValueString()
 	// Config validation already enforces this; re-check as defense in depth.
-	if err := validateCanonicalPath(target); err != nil {
+	if err := validateCanonicalPath(cfg.Path.ValueString()); err != nil {
 		resp.Diagnostics.AddAttributeError(path.Root("path"), "Invalid path", capitalize(err.Error())+".")
+		return
+	}
+	// Symlinks are followed, inside root_dir if it is set.
+	target, diags := resolvePathAttr(d.root(), cfg.Path.ValueString(), true)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
 		return
 	}
 
@@ -109,6 +117,7 @@ func (d *directoryDataSource) Read(ctx context.Context, req datasource.ReadReque
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	state.Path, state.ID = cfg.Path, cfg.Path
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 

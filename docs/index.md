@@ -68,9 +68,81 @@ The provider usually runs as root and acts on paths that other local users may b
 - **Special files are refused.** A FIFO, socket or device at a file's `path` is reported as "not a regular file", so it never causes the provider to hang or to read from or write to it.
 - **Destroy removes only what the resource created.** It uses `unlink`/`rmdir`, which never follow symlinks. If something else has taken the managed path's place, destroy leaves it alone and emits a warning.
 - **Recursive deletion (`force_destroy`) is held to a stricter standard.** No component of the path may be a symlink, and the directory is deleted relative to open directory descriptors, so a component swapped out mid-way cannot redirect it. Deletion never crosses into another mounted filesystem. `/`, empty paths and a fixed list of critical system directories (such as `/etc`, `/usr`, `/var/lib` and `/home`) are refused, and the check runs at plan time.
-- **Intermediate path components are resolved normally** for all other operations, so paths below system symlinks such as `/var/run` keep working. Every ancestor directory of a managed path must be writable only by trusted users. Otherwise a local user could redirect where a file or directory is created.
+- **Intermediate path components are resolved normally** for all other operations, so paths below system symlinks such as `/var/run` keep working. Every ancestor directory of a managed path must be writable only by trusted users. Otherwise a local user could redirect where a file or directory is created. With [`root_dir`](#root-directory) set, the provider resolves every component itself and never leaves the root.
 - **Error messages contain only the configured path and the operating-system error.** File content never appears in diagnostics. Note that file content is stored in Terraform state; see the [`sysutils_file`](./resources/file.md) caveats.
 
+## Root Directory
+
+By default the provider manages paths on the host as they are written. Set `root_dir` to manage a directory tree as if it were the root filesystem — for example a container image or OS image root filesystem being assembled in a build directory:
+
+```terraform
+# Build a container root filesystem in /srv/images/web/rootfs. Every path
+# below is inside that directory: /etc/nginx/nginx.conf is written to
+# /srv/images/web/rootfs/etc/nginx/nginx.conf.
+provider "sysutils" {
+  alias    = "image"
+  root_dir = "/srv/images/web/rootfs"
+}
+
+resource "sysutils_directory" "nginx_conf" {
+  provider = sysutils.image
+
+  path = "/etc/nginx"
+  # Use numeric IDs: names are looked up in the host's user database, not
+  # in the image's /etc/passwd.
+  owner = "0"
+  group = "0"
+}
+
+resource "sysutils_file" "nginx_conf" {
+  provider = sysutils.image
+
+  path    = "${sysutils_directory.nginx_conf.path}/nginx.conf"
+  content = "worker_processes auto;\n"
+}
+
+# An absolute target is resolved inside the image, like in a chroot.
+resource "sysutils_symlink" "localtime" {
+  provider = sysutils.image
+
+  path   = "/etc/localtime"
+  target = "/usr/share/zoneinfo/UTC"
+}
+```
+
+`root_dir` applies to the `sysutils_file`, `sysutils_file_line`, `sysutils_template_file`, `sysutils_directory` and `sysutils_symlink` resources and to the `sysutils_file` and `sysutils_directory` data sources. It does not apply to `source` of `sysutils_file` (a file on the machine running Terraform), and not to users, groups, systemd units or commands, which always act on the host. Use a separate, aliased provider configuration to mix both.
+
+Paths in the configuration, in the state, in ids and in import ids are always the paths *inside* the root, such as `/etc/nginx/nginx.conf`. Error messages show the host path the provider acted on.
+
+A tree like this is usually not under your control: it may be unpacked from an image and contain arbitrary symlinks. A symlink such as `etc -> /etc` would make a normal path lookup write to the host's `/etc`. The provider therefore resolves paths below `root_dir` itself, one component at a time, like `chroot` would:
+
+- **Absolute symlink targets are relative to `root_dir`.** A link `/lib -> /usr/lib` in the tree leads to `<root_dir>/usr/lib`, never to the host's `/usr/lib`. This is what the link means when the tree is used as a root filesystem, so links such as `/etc/localtime -> /usr/share/zoneinfo/UTC` work as expected.
+- **Symlinks that lead above `root_dir` are rejected.** A relative link such as `../../../etc` that climbs out of the root makes the operation fail with an error that the path "escapes root_dir". The same applies to the `sysutils_symlink` resource itself: a relative `target` that leads above `root_dir` is refused at plan time.
+- **The managed path itself is still never followed** by the resources, exactly as without `root_dir` (see the [security model](#security-model)). The data sources follow a symlink at `path`, inside the root.
+- At most 40 symlinks are followed per path; a loop fails with "too many levels of symbolic links".
+- `force_destroy` on `sysutils_directory` refuses the protected system directories both as paths inside the root (such as `/etc`) and as host paths.
+
+`root_dir` must be an absolute path in canonical form and known at plan time. It does not have to exist when Terraform starts, but it must exist by the time a rooted resource or data source is read or applied; create it with a second, unrooted provider configuration if needed. Symlinks in `root_dir` itself are followed.
+
+Things to be aware of:
+
+- **Ownership:** `owner` and `group` names are looked up in the *host's* user and group database, not in the tree's `/etc/passwd` and `/etc/group`. Use numeric IDs for image trees whose users differ from the host's.
+- **Concurrency:** paths are resolved just before each operation. As on the host, the provider assumes that no other process modifies the tree while Terraform runs.
+- **Not a security boundary for untrusted configuration:** `root_dir` protects against symlinks in the tree, not against a configuration that is itself untrusted, which can simply use another provider configuration.
+
+## Change Visibility in Plans
+
+`terraform plan` is the provider's dry run: nothing on the host is modified before apply. The content resources are built so that the plan shows what apply will change:
+
+- `sysutils_file` records the file's actual text in `content` (or its base64 encoding in `content_base64`), so a plan after an edit outside Terraform shows a diff from what is on disk to what will be written.
+- `sysutils_template_file` renders the template during plan and records the actual file content in `rendered`, so the diff shows both drift and changed template inputs.
+- `sysutils_file_line` records the actual line or block, so the plan shows how the managed part of the file will change.
+
+When the content is sensitive — `sensitive_content` of `sysutils_file`, `sensitive_vars` of `sysutils_template_file`, or a sensitive variable used in `content`, `line` or `block` — Terraform hides it and the plan shows only the change to the `content_sha256` checksum (and `content_md5` where available). Every content resource exposes `content_sha256` for this purpose.
+
+<!-- schema generated by tfplugindocs -->
 ## Schema
 
-The provider takes no configuration arguments.
+### Optional
+
+- `root_dir` (String) Directory that every managed path is relative to, as if the provider ran in a chroot there. With `root_dir = "/srv/rootfs"`, a `sysutils_file` with `path = "/etc/hosts"` writes `/srv/rootfs/etc/hosts`. Use it to build a container or OS image root filesystem tree. Applies to the `sysutils_file`, `sysutils_file_line`, `sysutils_template_file`, `sysutils_directory` and `sysutils_symlink` resources and the `sysutils_file` and `sysutils_directory` data sources; `path` attributes, ids and import ids keep the path inside the root. Symlinks inside the root are resolved as they would be in a chroot: absolute link targets are relative to `root_dir`, and a link that leads above `root_dir` is an error, so no symlink in the tree can make the provider act outside it. Must be an absolute path in canonical form; symlinks in `root_dir` itself are followed. It must exist when a resource or data source is read or applied. Must be known at plan time. Defaults to `"/"`, the host's root directory.

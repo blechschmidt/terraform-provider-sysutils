@@ -21,11 +21,14 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
-var _ datasource.DataSource = (*fileDataSource)(nil)
+var (
+	_ datasource.DataSource              = (*fileDataSource)(nil)
+	_ datasource.DataSourceWithConfigure = (*fileDataSource)(nil)
+)
 
 func NewFileDataSource() datasource.DataSource { return &fileDataSource{} }
 
-type fileDataSource struct{}
+type fileDataSource struct{ rootedDataSource }
 
 type fileDataSourceModel struct {
 	Path           types.String `tfsdk:"path"`
@@ -62,7 +65,8 @@ func (d *fileDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, r
 			"follow_symlinks": schema.BoolAttribute{
 				Optional: true,
 				MarkdownDescription: "If `true` and `path` is a symlink, read the file it points to; all attributes then describe the target, not the link. " +
-					"Defaults to `false`, in which case a symlink at `path` is an error.",
+					"Defaults to `false`, in which case a symlink at `path` is an error. " +
+					"If the provider's `root_dir` is set, the link is resolved inside it: absolute targets are relative to `root_dir`, and a link leading above `root_dir` is an error.",
 			},
 			"content": schema.StringAttribute{
 				Computed:            true,
@@ -125,18 +129,35 @@ func (d *fileDataSource) Read(ctx context.Context, req datasource.ReadRequest, r
 		return
 	}
 
-	target := cfg.Path.ValueString()
+	p := cfg.Path.ValueString()
 	// Config validation already enforces this; re-check as defense in depth.
-	if err := validateAbsolutePath(target); err != nil {
+	if err := validateAbsolutePath(p); err != nil {
 		resp.Diagnostics.AddAttributeError(path.Root("path"), "Invalid path", capitalize(err.Error())+".")
 		return
 	}
-
-	state, diags := inspectFile(target, cfg.FollowSymlinks.ValueBool())
+	follow := cfg.FollowSymlinks.ValueBool()
+	target, diags := resolvePathAttr(d.root(), p, false)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	// Inside root_dir the provider resolves the symlink itself, so the
+	// result must not be followed again by the kernel.
+	openPath, kernelFollow := target, follow && d.root().isHost()
+	if follow && !kernelFollow {
+		openPath, diags = resolvePathAttr(d.root(), p, true)
+		resp.Diagnostics.Append(diags...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+	}
+
+	state, diags := inspectFile(target, openPath, follow, kernelFollow)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	state.Path, state.ID = cfg.Path, cfg.Path
 	state.FollowSymlinks = cfg.FollowSymlinks
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
@@ -153,11 +174,13 @@ func openForInspection(target string, follow bool) (*os.File, error) {
 	return os.OpenFile(target, os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_CLOEXEC, 0)
 }
 
-// inspectFile builds the data source model for the regular file at target.
-// All metadata comes from the same descriptor that the content is read from,
+// inspectFile builds the data source model for the regular file at the host
+// path target. The file is opened at openPath, which is target itself or,
+// with follow set, what target was resolved to; the kernel follows a symlink
+// at openPath only if kernelFollow is set. All metadata comes from the same descriptor that the content is read from,
 // so it describes exactly the file that was read even if target is replaced
 // concurrently.
-func inspectFile(target string, follow bool) (fileDataSourceModel, diag.Diagnostics) {
+func inspectFile(target, openPath string, follow, kernelFollow bool) (fileDataSourceModel, diag.Diagnostics) {
 	var diags diag.Diagnostics
 	m := fileDataSourceModel{
 		Path:    types.StringValue(target),
@@ -165,7 +188,7 @@ func inspectFile(target string, follow bool) (fileDataSourceModel, diag.Diagnost
 		Content: types.StringNull(),
 	}
 
-	f, err := openForInspection(target, follow)
+	f, err := openForInspection(openPath, kernelFollow)
 	if err != nil {
 		switch {
 		case errors.Is(err, fs.ErrNotExist) && isSymlink(target):

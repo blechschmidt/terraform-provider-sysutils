@@ -2,6 +2,8 @@ package provider
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -29,6 +31,7 @@ var (
 	_ resource.ResourceWithImportState      = (*fileLineResource)(nil)
 	_ resource.ResourceWithConfigValidators = (*fileLineResource)(nil)
 	_ resource.ResourceWithModifyPlan       = (*fileLineResource)(nil)
+	_ resource.ResourceWithConfigure        = (*fileLineResource)(nil)
 )
 
 const (
@@ -42,7 +45,7 @@ const (
 
 func NewFileLineResource() resource.Resource { return &fileLineResource{} }
 
-type fileLineResource struct{}
+type fileLineResource struct{ rootedResource }
 
 type fileLineModel struct {
 	Path         types.String `tfsdk:"path"`
@@ -53,6 +56,7 @@ type fileLineModel struct {
 	InsertAfter  types.String `tfsdk:"insert_after"`
 	InsertBefore types.String `tfsdk:"insert_before"`
 	Create       types.Bool   `tfsdk:"create"`
+	ContentSHA   types.String `tfsdk:"content_sha256"`
 	ID           types.String `tfsdk:"id"`
 }
 
@@ -123,6 +127,11 @@ func (r *fileLineResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 				MarkdownDescription: "Create the file (mode `0644`, owned by the user running Terraform, missing parent directories with mode `0755`) if it does not exist. " +
 					"If `false`, a missing file is an error. Destroy never deletes the file. Defaults to `false`.",
 			},
+			"content_sha256": schema.StringAttribute{
+				Computed: true,
+				MarkdownDescription: "Hex-encoded SHA-256 checksum of the managed fragment as it appears in the file: the line, or the block including its marker lines, each followed by a line break. " +
+					"Computed from the configuration during plan and refreshed from the file, so a change is visible in the plan even when `line` or `block` comes from a sensitive value and Terraform hides it.",
+			},
 			"id": schema.StringAttribute{
 				Computed: true,
 				MarkdownDescription: "Resource identifier: `path`, a colon, and then `marker` for blocks or the word `line` for lines. " +
@@ -141,7 +150,8 @@ func (r *fileLineResource) ConfigValidators(_ context.Context) []resource.Config
 	}
 }
 
-// ModifyPlan computes the id and rejects combinations that only make sense
+// ModifyPlan computes the id and the checksum of the desired fragment, and
+// rejects combinations that only make sense
 // together, such as a block containing its own marker line, at plan time.
 func (r *fileLineResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
 	if req.Plan.Raw.IsNull() {
@@ -154,13 +164,16 @@ func (r *fileLineResource) ModifyPlan(ctx context.Context, req resource.ModifyPl
 	}
 	if !plan.allKnown() {
 		resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("id"), types.StringUnknown())...)
+		resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("content_sha256"), types.StringUnknown())...)
 		return
 	}
-	if _, err := plan.spec(); err != nil {
+	spec, err := plan.spec()
+	if err != nil {
 		resp.Diagnostics.AddError("Invalid configuration", capitalize(err.Error())+".")
 		return
 	}
 	resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("id"), plan.id())...)
+	resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("content_sha256"), fragmentChecksum(spec.render()))...)
 }
 
 func (r *fileLineResource) Create(ctx context.Context, req resource.CreateRequest, resp *resource.CreateResponse) {
@@ -182,7 +195,12 @@ func (r *fileLineResource) Read(ctx context.Context, req resource.ReadRequest, r
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	found, diags := refreshFileLine(&state)
+	target, diags := resolvePathAttr(r.root(), state.Path.ValueString(), false)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	found, diags := refreshFileLine(target, &state)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -214,10 +232,14 @@ func (r *fileLineResource) Delete(ctx context.Context, req resource.DeleteReques
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	target := state.Path.ValueString()
 	// State is not validated by the schema; never act on an invalid path.
-	if err := validateAbsolutePath(target); err != nil {
+	if err := validateAbsolutePath(state.Path.ValueString()); err != nil {
 		resp.Diagnostics.AddError("Refusing to edit file", capitalize(err.Error())+".")
+		return
+	}
+	target, diags := resolvePathAttr(r.root(), state.Path.ValueString(), false)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
 		return
 	}
 	spec, err := state.spec()
@@ -295,10 +317,13 @@ func (r *fileLineResource) ImportState(ctx context.Context, req resource.ImportS
 // the file.
 func (r *fileLineResource) apply(plan, prev *fileLineModel) diag.Diagnostics {
 	var diags diag.Diagnostics
-	target := plan.Path.ValueString()
 	// Config validation already enforces this; re-check as defense in depth.
-	if err := validateAbsolutePath(target); err != nil {
+	if err := validateAbsolutePath(plan.Path.ValueString()); err != nil {
 		diags.AddAttributeError(path.Root("path"), "Invalid path", capitalize(err.Error())+".")
+		return diags
+	}
+	target, diags := resolvePathAttr(r.root(), plan.Path.ValueString(), false)
+	if diags.HasError() {
 		return diags
 	}
 	desired, err := plan.spec()
@@ -355,7 +380,7 @@ func (r *fileLineResource) apply(plan, prev *fileLineModel) diag.Diagnostics {
 		}
 	}
 
-	found, refreshDiags := refreshFileLine(plan)
+	found, refreshDiags := refreshFileLine(target, plan)
 	diags.Append(refreshDiags...)
 	if !diags.HasError() && !found {
 		diags.AddError("Writing file", fmt.Sprintf("The managed content is missing from %q immediately after writing it.", target))
@@ -363,13 +388,13 @@ func (r *fileLineResource) apply(plan, prev *fileLineModel) diag.Diagnostics {
 	return diags
 }
 
-// refreshFileLine updates m from the file on disk. It reports found=false if
+// refreshFileLine updates m from the file at the host path target. It
+// reports found=false if
 // the file or the managed fragment is missing, so the resource is planned
 // for creation. If a line selected by regexp, or the content between the
 // block markers, differs from m, m is updated with the actual content so the
 // plan shows a readable diff.
-func refreshFileLine(m *fileLineModel) (found bool, diags diag.Diagnostics) {
-	target := m.Path.ValueString()
+func refreshFileLine(target string, m *fileLineModel) (found bool, diags diag.Diagnostics) {
 	spec, err := m.spec()
 	if err != nil {
 		diags.AddError("Invalid state", capitalize(err.Error())+".")
@@ -383,7 +408,8 @@ func refreshFileLine(m *fileLineModel) (found bool, diags diag.Diagnostics) {
 		diags.AddAttributeError(path.Root("path"), "Reading file", capitalize(err.Error())+".")
 		return false, diags
 	}
-	status, _, _, actual, err := spec.inspect(parseTextFile(data).lines)
+	lines := parseTextFile(data).lines
+	status, start, end, actual, err := spec.inspect(lines)
 	if err != nil {
 		diags.AddError("Reading managed content", fmt.Sprintf("%s in %q. Remove or complete the block manually.", capitalize(err.Error()), target))
 		return false, diags
@@ -407,8 +433,19 @@ func refreshFileLine(m *fileLineModel) (found bool, diags diag.Diagnostics) {
 	if m.Create.IsNull() || m.Create.IsUnknown() {
 		m.Create = types.BoolValue(false)
 	}
+	m.ContentSHA = fragmentChecksum(lines[start:end])
 	m.ID = m.id()
 	return true, diags
+}
+
+// fragmentChecksum returns the hex-encoded SHA-256 of lines, each terminated
+// by a line break, as the value of content_sha256.
+func fragmentChecksum(lines []string) types.String {
+	h := sha256.New()
+	for _, l := range lines {
+		_, _ = h.Write([]byte(l + "\n")) // hash.Hash writes never fail.
+	}
+	return types.StringValue(hex.EncodeToString(h.Sum(nil)))
 }
 
 // isBlock reports whether m manages a block. After import of a block only
