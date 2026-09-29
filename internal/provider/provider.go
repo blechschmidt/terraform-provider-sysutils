@@ -37,6 +37,7 @@ func (p *sysutilsProvider) Resources(_ context.Context) []func() resource.Resour
 	return []func() resource.Resource{
 		NewFileResource,
 		NewDirectoryResource,
+		NewSymlinkResource,
 		NewUserResource,
 		NewExecResource,
 	}
