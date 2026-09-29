@@ -62,3 +62,29 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Acceptance tests (${{ matrix.cli }} ${{ matrix.version }}, root in Docker)
         run: make testacc-docker TF_CLI=${{ matrix.cli }} TF_CLI_VERSION=${{ matrix.version }}
+
+  # examples/complete end to end with the provider built from this commit:
+  # init, plan, apply, a second plan that must be empty, and destroy (see
+  # scripts/e2e-complete.sh). Runs directly on the runner VM as root, because
+  # the stack starts a systemd unit, which needs systemd as PID 1.
+  e2e:
+    name: e2e examples/complete (${{ matrix.cli }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        cli: [terraform, tofu]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5 # v6.2.0
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+      - name: Install ${{ matrix.cli }}
+        run: sudo scripts/install-tf-cli.sh ${{ matrix.cli }} latest /usr/local/bin
+      - name: Apply, re-plan and destroy examples/complete
+        run: sudo --preserve-env=GOCACHE,GOMODCACHE,GOPATH env "PATH=$PATH" TF_CLI=${{ matrix.cli }} make e2e
+        env:
+          GOCACHE: /home/runner/.cache/go-build
+          GOMODCACHE: /home/runner/go/pkg/mod

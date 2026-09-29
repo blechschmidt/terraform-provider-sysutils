@@ -125,7 +125,7 @@ The [service account guide](./docs/guides/service-account.md) walks through a co
 - [Guide: provisioning a service account and its files](./docs/guides/service-account.md)
 - Resources: [`sysutils_file`](./docs/resources/file.md), [`sysutils_file_line`](./docs/resources/file_line.md), [`sysutils_ini_value`](./docs/resources/ini_value.md), [`sysutils_template_file`](./docs/resources/template_file.md), [`sysutils_directory`](./docs/resources/directory.md), [`sysutils_symlink`](./docs/resources/symlink.md), [`sysutils_user`](./docs/resources/user.md), [`sysutils_group`](./docs/resources/group.md), [`sysutils_systemd_unit`](./docs/resources/systemd_unit.md), [`sysutils_mount`](./docs/resources/mount.md), [`sysutils_sysctl`](./docs/resources/sysctl.md), [`sysutils_kernel_module`](./docs/resources/kernel_module.md), [`sysutils_cron_job`](./docs/resources/cron_job.md), [`sysutils_package`](./docs/resources/package.md), [`sysutils_exec`](./docs/resources/exec.md)
 - Data sources: [`sysutils_file`](./docs/data-sources/file.md), [`sysutils_directory`](./docs/data-sources/directory.md), [`sysutils_user`](./docs/data-sources/user.md), [`sysutils_group`](./docs/data-sources/group.md)
-- [Examples](./examples)
+- [Examples](./examples), including [`examples/complete`](./examples/complete), a whole service host in one stack
 
 ## Security considerations
 
@@ -185,6 +185,7 @@ Building requires Go (see `go.mod` for the version). Acceptance tests and doc ge
 | `make testacc-docker` | Run the full suite, including acceptance tests, as root inside a disposable container. **Use this to run acceptance tests.** Select the CLI with `TF_CLI=terraform\|tofu` and `TF_CLI_VERSION=<version>\|<prefix>\|latest`. |
 | `make testacc-docker-matrix` | Run `testacc-docker` for every CLI in the CI matrix: Terraform 1.5, Terraform latest and OpenTofu latest. |
 | `make testacc` | Run the acceptance tests directly on the host (requires root). |
+| `make e2e` | Apply [`examples/complete`](./examples/complete) with the local build, check that a second plan is empty, and destroy it. Changes the host (requires root); CI runs it on its runner VMs. |
 | `make lint` | Run `golangci-lint`. |
 | `make coverage` | Write a test-coverage report to `coverage.html`. |
 | `make docs` | Format the examples and regenerate `docs/`. |
@@ -216,6 +217,16 @@ docker run --rm --cap-add SYS_ADMIN --security-opt apparmor=unconfined \
 
 CI runs `make testacc-docker` for each CLI in its matrix (Terraform 1.5, latest Terraform, latest OpenTofu) in the `acceptance` job of `.github/workflows/test.yaml`.
 
+#### Upgrade tests
+
+`internal/provider/upgrade_acc_test.go` checks that state written by the last release still works with the current code. Each test applies a configuration with the released provider, downloaded from the Terraform Registry, then plans the same configuration with the current build and fails unless the plan is empty. This catches attributes added with a default or `RequiresReplace`, renamed or retyped attributes and missing state upgraders, which would otherwise make users' next plan replace their resources (for `sysutils_exec`: run the command again). If such a test fails because the schema had to change, bump the resource's schema `Version` and add a state upgrader, as `sysutils_exec` does in `exec_resource_upgrade.go`. The tests need network access to `registry.terraform.io`, also with OpenTofu.
+
+They start from the release in `defaultUpgradeFromVersion`; `SYSUTILS_UPGRADE_FROM_VERSION` overrides it. `upgradeFirstRelease` records the first release of each tested resource. A resource that has not been released yet, such as `sysutils_directory`, has no state in the wild to be compatible with: its test skips itself with "is not in any release yet", which `scripts/testacc-container.sh` allows. After a release, bump `defaultUpgradeFromVersion` and fill in the release of any newly released resource.
+
+#### End-to-end example
+
+`make e2e` runs `scripts/e2e-complete.sh`: it builds the provider, points Terraform at it with `dev_overrides`, and runs `init`, `plan`, `apply`, a second `plan -detailed-exitcode` that must report no changes, and `destroy` on a copy of [`examples/complete`](./examples/complete). After apply and after destroy it checks the files, the user, the unit and the sysctl entry on the host. It creates the user and group `sysutilse2e`, the unit `sysutilse2e.service` and `/etc/sysctl.d/90-sysutilse2e.conf`, and writes everything else below `/var/tmp/sysutils-e2e/rootfs`; it refuses to start if any of these exist. The unit is left out if systemd is not PID 1. OpenTofu skips `init`, which fails with `dev_overrides` for a provider that is not in its registry. The `e2e` CI job runs it as root on the runner VM with the latest Terraform and the latest OpenTofu.
+
 To try a local build against a Terraform configuration, build it and point Terraform at it with a [`dev_overrides`](https://developer.hashicorp.com/terraform/cli/config/config-file#development-overrides-for-provider-developers) block in `~/.terraformrc`:
 
 ```hcl
@@ -239,7 +250,7 @@ Change those sources, run `make docs`, and commit the regenerated `docs/` togeth
 
 ## Releasing
 
-Tag a commit matching `v*` and push the tag. The `release` GitHub workflow uses goreleaser to build, sign (GPG) and publish the release, including the Terraform Registry manifest. The repository needs `GPG_PRIVATE_KEY` and `PASSPHRASE` configured as Actions secrets.
+Tag a commit matching `v*` and push the tag. Afterwards, bump `defaultUpgradeFromVersion` in `internal/provider/upgrade_acc_test.go` to the new release (see [upgrade tests](#upgrade-tests)). The `release` GitHub workflow uses goreleaser to build, sign (GPG) and publish the release, including the Terraform Registry manifest. The repository needs `GPG_PRIVATE_KEY` and `PASSPHRASE` configured as Actions secrets.
 
 ## License
 

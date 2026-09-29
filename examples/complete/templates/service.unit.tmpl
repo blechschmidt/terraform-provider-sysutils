@@ -1,0 +1,17 @@
+[Unit]
+Description=${name} (sysutils complete example)
+After=network.target
+
+# Configuration checksum, so that a configuration change restarts the service:
+# ${config_sha256}
+
+[Service]
+Type=simple
+User=${user}
+EnvironmentFile=${config_file}
+# A stand-in for the real service: report the configuration, then idle.
+ExecStart=/bin/sh -c 'echo "$SERVICE_NAME listening on port $LISTEN_PORT (log level $LOG_LEVEL)"; exec sleep infinity'
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

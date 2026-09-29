@@ -41,6 +41,13 @@ testacc-docker-matrix:
 # Kept for existing scripts and docs.
 test-docker: testacc-docker
 
+# Apply examples/complete with the locally built provider (dev_overrides),
+# check that a second plan is empty, then destroy it. Creates a user, a group,
+# a systemd unit and a sysctl.d file on the host: requires root and is meant
+# for CI runners and throwaway VMs. TF_CLI selects terraform or tofu.
+e2e:
+	TF_CLI=$(TF_CLI) scripts/e2e-complete.sh
+
 coverage:
 	go test ./... -coverprofile=coverage.out -timeout 30m
 	go tool cover -html=coverage.out -o coverage.html
@@ -68,4 +75,4 @@ docs-check:
 		exit 1; \
 	fi
 
-.PHONY: build install test testacc testacc-docker testacc-docker-matrix test-docker coverage lint docs docs-check
+.PHONY: build install test testacc testacc-docker testacc-docker-matrix test-docker e2e coverage lint docs docs-check

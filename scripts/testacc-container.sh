@@ -9,7 +9,7 @@
 set -euo pipefail
 
 : "${TF_CLI:=terraform}"
-: "${ACC_ALLOWED_SKIPS:=systemd is not PID 1}"
+: "${ACC_ALLOWED_SKIPS:=systemd is not PID 1|is not in any release yet}"
 
 if [ "$(id -u)" -ne 0 ]; then
 	echo "testacc-container.sh must run as root" >&2
