@@ -42,7 +42,9 @@ jobs:
   # Full suite, including acceptance tests, as root in a disposable container
   # (make testacc-docker), so that the user, group, chown and file_line tests
   # run instead of being skipped. The job fails if any test other than the
-  # systemd ones (no systemd as PID 1 in a container) is skipped.
+  # systemd ones (no systemd as PID 1 in a container) is skipped. It also
+  # runs the upgrade tests from a local build of the merge base with main
+  # (SYSUTILS_UPGRADE_FROM_REF=auto; see upgrade_local_acc_test.go).
   acceptance:
     name: acceptance (${{ matrix.cli }} ${{ matrix.version }})
     runs-on: ubuntu-latest
@@ -60,8 +62,12 @@ jobs:
             version: latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          # The upgrade tests build the provider at earlier commits: the
+          # merge base with main, or the commit that added a resource.
+          fetch-depth: 0
       - name: Acceptance tests (${{ matrix.cli }} ${{ matrix.version }}, root in Docker)
-        run: make testacc-docker TF_CLI=${{ matrix.cli }} TF_CLI_VERSION=${{ matrix.version }}
+        run: make testacc-docker TF_CLI=${{ matrix.cli }} TF_CLI_VERSION=${{ matrix.version }} SYSUTILS_UPGRADE_FROM_REF=auto
 
   # examples/complete end to end with the provider built from this commit:
   # init, plan, apply, a second plan that must be empty, and destroy (see

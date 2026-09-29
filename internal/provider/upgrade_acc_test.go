@@ -25,6 +25,9 @@ import (
 //
 // Both steps use the registry address of the released provider, so that the
 // in-process provider of the second step takes over the state of the first.
+//
+// Resources that are not in a release yet are covered by the upgrade tests
+// from a local baseline build in upgrade_local_acc_test.go.
 
 // defaultUpgradeFromVersion is the release the upgrade tests start from.
 // SYSUTILS_UPGRADE_FROM_VERSION overrides it. Bump it after every release.

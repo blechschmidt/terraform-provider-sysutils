@@ -182,7 +182,7 @@ Building requires Go (see `go.mod` for the version). Acceptance tests and doc ge
 | `make build` | Build the provider binary `terraform-provider-sysutils` in the repository root. |
 | `make install` | Build and copy the binary into `~/.terraform.d/plugins/` so a local Terraform configuration can use it. |
 | `make test` | Run unit tests. Acceptance tests are skipped, so the host isn't touched. |
-| `make testacc-docker` | Run the full suite, including acceptance tests, as root inside a disposable container. **Use this to run acceptance tests.** Select the CLI with `TF_CLI=terraform\|tofu` and `TF_CLI_VERSION=<version>\|<prefix>\|latest`. |
+| `make testacc-docker` | Run the full suite, including acceptance tests, as root inside a disposable container. **Use this to run acceptance tests.** Select the CLI with `TF_CLI=terraform\|tofu` and `TF_CLI_VERSION=<version>\|<prefix>\|latest`; add `SYSUTILS_UPGRADE_FROM_REF=auto` to also run the upgrade tests from a local baseline build ([upgrade tests](#upgrade-tests)). |
 | `make testacc-docker-matrix` | Run `testacc-docker` for every CLI in the CI matrix: Terraform 1.5, Terraform latest and OpenTofu latest. |
 | `make testacc` | Run the acceptance tests directly on the host (requires root). |
 | `make e2e` | Apply [`examples/complete`](./examples/complete) with the local build, check that a second plan is empty, and destroy it. Changes the host (requires root); CI runs it on its runner VMs. |
@@ -207,7 +207,7 @@ make testacc-docker-matrix                                    # all CLIs tested 
 
 `scripts/install-tf-cli.sh` downloads the CLI and checks it against the release's `SHA256SUMS`. The container gets `CAP_SYS_ADMIN` and no AppArmor profile, so that the tests can mount a tmpfs in the container's own mount namespace. It gets neither `CAP_SYS_MODULE` nor a writable `/proc/sys`, so the acceptance tests of `sysutils_kernel_module` and `sysutils_sysctl` skip themselves there; their unit tests use a fake `modprobe` and a fake `/proc/sys` and always run. On a root host or VM, the acceptance tests load and unload the `dummy` module and change `fs.lease-break-time`, restoring it afterwards, with configuration files in temporary directories. The acceptance tests of `sysutils_package` install, pin, upgrade and remove the small `tree` package (override with `SYSUTILS_ACC_PACKAGE`) with whichever of apt, dnf, yum or apk is installed, refreshing the package index first, so they need network access to the distribution's repositories. They skip themselves if the package is already installed, so that they never remove something the host needs; its unit tests use a fake package manager and scripted command output and always run.
 
-The run fails not only when a test fails, but also when a test is skipped. Only the systemd tests may be skipped, because a container has no systemd as PID 1. This way a broken container setup can't silently turn the root-only user, group, chown and file_line tests into skips. Set `ACC_ALLOWED_SKIPS` to an extended regular expression to allow other skip messages. Extra arguments to the script are passed to `go test`, for example:
+The run fails not only when a test fails, but also when a test is skipped. Only the systemd, kernel_module and sysctl tests may be skipped, because a container has no systemd as PID 1, no `CAP_SYS_MODULE` and a read-only `/proc/sys`, and so may the upgrade tests described below while their prerequisites are missing. This way a broken container setup can't silently turn the root-only user, group, chown and file_line tests into skips. Set `ACC_ALLOWED_SKIPS` to an extended regular expression to allow other skip messages. Extra arguments to the script are passed to `go test`, for example:
 
 ```sh
 docker run --rm --cap-add SYS_ADMIN --security-opt apparmor=unconfined \
@@ -215,7 +215,7 @@ docker run --rm --cap-add SYS_ADMIN --security-opt apparmor=unconfined \
   scripts/testacc-container.sh -run 'TestAccUser'
 ```
 
-CI runs `make testacc-docker` for each CLI in its matrix (Terraform 1.5, latest Terraform, latest OpenTofu) in the `acceptance` job of `.github/workflows/test.yaml`.
+CI runs `make testacc-docker SYSUTILS_UPGRADE_FROM_REF=auto` for each CLI in its matrix (Terraform 1.5, latest Terraform, latest OpenTofu) in the `acceptance` job of `.github/workflows/test.yaml`.
 
 #### Upgrade tests
 
@@ -224,6 +224,33 @@ CI runs `make testacc-docker` for each CLI in its matrix (Terraform 1.5, latest 
 They start from the release in `defaultUpgradeFromVersion`; `SYSUTILS_UPGRADE_FROM_VERSION` overrides it. `upgradeFirstRelease` records the first release of each tested resource. A resource that has not been released yet, such as `sysutils_directory`, has no state in the wild to be compatible with: its test skips itself with "is not in any release yet", which `scripts/testacc-container.sh` allows. After a release, bump `defaultUpgradeFromVersion` and fill in the release of any newly released resource.
 
 #### End-to-end example
+
+`internal/provider/upgrade_local_acc_test.go` covers every resource, released or not, by upgrading from a provider built from an earlier commit of this repository instead of a release. Each test
+
+1. builds the provider at the baseline commit (`git archive` into a temporary directory, then `go build`) and installs it as version `0.0.<number of commits>` into a temporary [filesystem mirror](https://developer.hashicorp.com/terraform/cli/config/config-file#filesystem_mirror), which a CLI configuration file passed in `TF_CLI_CONFIG_FILE` points Terraform or OpenTofu at (`dev_overrides` can't be used, because `tofu init` fails with it);
+2. applies a configuration with that build and records the state;
+3. plans the same configuration with the current code, fails unless the plan is empty, applies it, and fails if any attribute in the recorded state lost or changed its value (attributes the baseline didn't have may be added);
+4. plans once more in a `PlanOnly` step, which fails unless the plans with and without a refresh are both empty. A plan without a refresh is only checked once the upgraded state has been stored: before that, Terraform plans an in-place update with no changed values for a resource whose schema has gained a sensitive attribute since the baseline;
+5. destroys with the current code.
+
+They run only if `SYSUTILS_UPGRADE_FROM_REF` is set, together with `TF_ACC=1` and root:
+
+| `SYSUTILS_UPGRADE_FROM_REF` | Baseline of each resource |
+|-----------------------------|---------------------------|
+| unset | none; the tests skip themselves with "SYSUTILS_UPGRADE_FROM_REF is not set", which `scripts/testacc-container.sh` allows |
+| `auto` | the merge base of `HEAD` and `main` (or `origin/main`) if the resource exists there, otherwise the commit that added the resource (`internal/provider/<name>_resource.go`) |
+| any git ref, such as `v1.0.1` or `HEAD~5` | that commit if the resource exists there, otherwise the commit that added the resource |
+
+Each baseline commit is built once per `go test` run, and the builds are deleted when it ends. The tests need `git`, the full history (a shallow clone has no merge base) and the Go toolchain, and network access if the baseline needs modules that aren't in the module cache. The `systemd_unit`, `mount`, `sysctl`, `kernel_module`, `cron_job` and `package` tests change the host just like the resources' own acceptance tests, and skip themselves under the same conditions. A baseline build can't use the fake fstab and package managers of the other tests, so they use the real ones: the `mount` test uses `persist = false` so that `/etc/fstab` is left alone, and the `cron_job` test writes a uniquely named file to `/etc/cron.d`.
+
+`make testacc-docker SYSUTILS_UPGRADE_FROM_REF=auto` passes the variable into the container and mounts the repository's `.git` directory read-only (it must be a directory, not a `git worktree` link file). The `acceptance` CI job runs it this way, with a full-history checkout. To run the tests directly on a root VM:
+
+```sh
+TF_ACC=1 SYSUTILS_UPGRADE_FROM_REF=auto go test ./internal/provider/ -run TestAccUpgradeLocal -v
+TF_ACC=1 SYSUTILS_UPGRADE_FROM_REF=v1.0.1 go test ./internal/provider/ -run TestAccUpgradeLocal_file -v
+```
+
+If one of these tests fails because a change is not backward compatible, fix it as for the release-based tests above: make `Read` fill in new attributes, or bump the schema `Version` and add a state upgrader. A deliberate change to a stored value, such as the `id` format of `sysutils_file_line`, is listed in the test with `localUpgradeStepsChanging`.
 
 `make e2e` runs `scripts/e2e-complete.sh`: it builds the provider, points Terraform at it with `dev_overrides`, and runs `init`, `plan`, `apply`, a second `plan -detailed-exitcode` that must report no changes, and `destroy` on a copy of [`examples/complete`](./examples/complete). After apply and after destroy it checks the files, the user, the unit and the sysctl entry on the host. It creates the user and group `sysutilse2e`, the unit `sysutilse2e.service` and `/etc/sysctl.d/90-sysutilse2e.conf`, and writes everything else below `/var/tmp/sysutils-e2e/rootfs`; it refuses to start if any of these exist. The unit is left out if systemd is not PID 1. OpenTofu skips `init`, which fails with `dev_overrides` for a provider that is not in its registry. The `e2e` CI job runs it as root on the runner VM with the latest Terraform and the latest OpenTofu.
 

@@ -20,9 +20,17 @@ testacc:
 # for every entry of its CLI matrix. SYS_ADMIN and an unconfined AppArmor
 # profile let the tests mount a tmpfs inside the container's own mount
 # namespace; the host's mounts are not affected.
+#
+# SYSUTILS_UPGRADE_FROM_REF=auto (or a git ref) also runs the upgrade tests
+# from a local baseline build (internal/provider/upgrade_local_acc_test.go).
+# They build the provider at an earlier commit, so the repository's .git
+# directory is mounted read-only into the container; it needs the full
+# history.
 TF_CLI ?= terraform
 TF_CLI_VERSION ?= latest
 TESTACC_IMAGE = terraform-provider-sysutils-testacc:$(TF_CLI)-$(TF_CLI_VERSION)
+SYSUTILS_UPGRADE_FROM_REF ?=
+TESTACC_UPGRADE_ARGS = $(if $(SYSUTILS_UPGRADE_FROM_REF),-e SYSUTILS_UPGRADE_FROM_REF=$(SYSUTILS_UPGRADE_FROM_REF) -v $(CURDIR)/.git:/workspace/.git:ro)
 
 testacc-docker:
 	docker build -f Dockerfile.test \
@@ -30,7 +38,7 @@ testacc-docker:
 		--build-arg TF_CLI_VERSION=$(TF_CLI_VERSION) \
 		-t $(TESTACC_IMAGE) .
 	docker run --rm --cap-add SYS_ADMIN --security-opt apparmor=unconfined \
-		$(TESTACC_IMAGE)
+		$(TESTACC_UPGRADE_ARGS) $(TESTACC_IMAGE)
 
 # Run testacc-docker for every CLI in the CI matrix.
 testacc-docker-matrix:

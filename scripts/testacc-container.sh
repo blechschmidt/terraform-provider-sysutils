@@ -9,7 +9,11 @@
 set -euo pipefail
 
 : "${TF_CLI:=terraform}"
-: "${ACC_ALLOWED_SKIPS:=systemd is not PID 1|is not in any release yet}"
+# Allowed by default: the systemd tests (no systemd as PID 1 in a
+# container), the kernel_module and sysctl tests (no CAP_SYS_MODULE and a
+# read-only /proc/sys in a container), and the local-baseline upgrade tests
+# unless SYSUTILS_UPGRADE_FROM_REF is set, as it is in CI.
+: "${ACC_ALLOWED_SKIPS:=systemd is not PID 1|is not in any release yet|CAP_SYS_MODULE is not in the effective capability set|the kernel does not allow setting [^ ]+ here|SYSUTILS_UPGRADE_FROM_REF is not set}"
 
 if [ "$(id -u)" -ne 0 ]; then
 	echo "testacc-container.sh must run as root" >&2
