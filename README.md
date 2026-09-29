@@ -1,6 +1,6 @@
 # terraform-provider-sysutils
 
-A Terraform provider for basic Linux system-administration primitives: files, lines in files, templated files, directories, symlinks, local users and groups, systemd units, mounts, kernel parameters and modules, cron jobs, and commands. It is meant for bootstrapping hosts where a full configuration-management system would be overkill, and for the last mile of host setup that other providers don't cover.
+A Terraform provider for basic Linux system-administration primitives: files, lines in files, templated files, directories, symlinks, local users and groups, systemd units, mounts, kernel parameters and modules, cron jobs, OS packages, and commands. It is meant for bootstrapping hosts where a full configuration-management system would be overkill, and for the last mile of host setup that other providers don't cover.
 
 The provider acts on the machine Terraform runs on. It has no remote-execution mode.
 
@@ -20,6 +20,7 @@ The provider acts on the machine Terraform runs on. It has no remote-execution m
 | [`sysutils_sysctl`](./docs/resources/sysctl.md) | A kernel parameter in `/proc/sys` and its `sysctl.d` entry, like `sysctl -w` or Ansible's `sysctl` module | Yes, by name or `name:file` | Running value changed; `sysctl.d` entry missing or changed | Yes |
 | [`sysutils_kernel_module`](./docs/resources/kernel_module.md) | A kernel module loaded with `modprobe`, its parameters, and its `modules-load.d` and `modprobe.d` files | Yes, by name (must be loaded) | Module unloaded; configuration files missing or changed | Yes, with `CAP_SYS_MODULE` |
 | [`sysutils_cron_job`](./docs/resources/cron_job.md) | A cron job in its own `/etc/cron.d` file, written with mode `0644` and root ownership, like Ansible's `cron` module with `cron_file` | Yes, by name | Schedule, user, command, environment, comment or any other content changed; mode or ownership changed; file missing | Yes |
+| [`sysutils_package`](./docs/resources/package.md) | An OS package installed, kept at the newest version, pinned to an exact version or removed with `apt`, `dnf`, `yum` or `apk` (detected automatically), like Ansible's `package` module | Yes, by name (must be installed) | Package removed, installed, upgraded or downgraded outside Terraform; with `state = "latest"`, a newer version in the package index | Yes |
 | [`sysutils_exec`](./docs/resources/exec.md) | A command run at create (and optionally destroy) time, with its exit code and output | No | No: results are recorded once; use `triggers` to re-run | Only if the command needs it |
 
 | Data source | Reads | Requires root |
@@ -57,7 +58,7 @@ provider "sysutils" {
 }
 ```
 
-Symlinks in the tree are resolved inside it: absolute link targets are relative to `root_dir`, and a link that leads above `root_dir` is an error. The mount, sysctl and kernel module resources change the running host and refuse to plan with `root_dir` set. See [Root Directory](./docs/index.md#root-directory).
+Symlinks in the tree are resolved inside it: absolute link targets are relative to `root_dir`, and a link that leads above `root_dir` is an error. The mount, sysctl, kernel module and package resources change the running host and refuse to plan with `root_dir` set. See [Root Directory](./docs/index.md#root-directory).
 
 ### Requirements
 
@@ -121,7 +122,7 @@ The [service account guide](./docs/guides/service-account.md) walks through a co
 
 - [Provider overview and security model](./docs/index.md)
 - [Guide: provisioning a service account and its files](./docs/guides/service-account.md)
-- Resources: [`sysutils_file`](./docs/resources/file.md), [`sysutils_file_line`](./docs/resources/file_line.md), [`sysutils_template_file`](./docs/resources/template_file.md), [`sysutils_directory`](./docs/resources/directory.md), [`sysutils_symlink`](./docs/resources/symlink.md), [`sysutils_user`](./docs/resources/user.md), [`sysutils_group`](./docs/resources/group.md), [`sysutils_systemd_unit`](./docs/resources/systemd_unit.md), [`sysutils_mount`](./docs/resources/mount.md), [`sysutils_sysctl`](./docs/resources/sysctl.md), [`sysutils_kernel_module`](./docs/resources/kernel_module.md), [`sysutils_cron_job`](./docs/resources/cron_job.md), [`sysutils_exec`](./docs/resources/exec.md)
+- Resources: [`sysutils_file`](./docs/resources/file.md), [`sysutils_file_line`](./docs/resources/file_line.md), [`sysutils_template_file`](./docs/resources/template_file.md), [`sysutils_directory`](./docs/resources/directory.md), [`sysutils_symlink`](./docs/resources/symlink.md), [`sysutils_user`](./docs/resources/user.md), [`sysutils_group`](./docs/resources/group.md), [`sysutils_systemd_unit`](./docs/resources/systemd_unit.md), [`sysutils_mount`](./docs/resources/mount.md), [`sysutils_sysctl`](./docs/resources/sysctl.md), [`sysutils_kernel_module`](./docs/resources/kernel_module.md), [`sysutils_cron_job`](./docs/resources/cron_job.md), [`sysutils_package`](./docs/resources/package.md), [`sysutils_exec`](./docs/resources/exec.md)
 - Data sources: [`sysutils_file`](./docs/data-sources/file.md), [`sysutils_directory`](./docs/data-sources/directory.md), [`sysutils_user`](./docs/data-sources/user.md), [`sysutils_group`](./docs/data-sources/group.md)
 - [Examples](./examples)
 
@@ -167,6 +168,7 @@ Don't manage secrets with these resources unless your state backend encrypts dat
 - `sysutils_user` and `sysutils_group` change `/etc/passwd`, `/etc/group` and `/etc/shadow`. Changing a group's gid doesn't re-own existing files, and changing a user's uid re-owns only the files in their home directory. Fix ownership elsewhere yourself.
 - `sysutils_sysctl` and `sysutils_kernel_module` change the running kernel. A wrong parameter can cut the host off the network or weaken its hardening (for example `kernel.kptr_restrict` or `kernel.yama.ptrace_scope`), and changing a module's parameters unloads and reloads it. Sysctl names are validated so that they can only refer to files below `/proc/sys`, and module names and parameters are checked against strict patterns before `modprobe` sees them.
 - `sysutils_cron_job` schedules commands that run as root by default. Its file is always given mode `0644` and root ownership before it is renamed into place, so no other user can change the job, and job names are restricted to `[A-Za-z0-9_-]` so that the file can only be created directly in `/etc/cron.d`.
+- `sysutils_package` installs software as root, and package installation scripts run as root. Only the repositories and keys already configured on the host are used. Package names and versions are checked against strict patterns and passed to the package manager as separate arguments, never through a shell, so they can't inject options or commands. Removing a package also removes the packages that depend on it (apt, dnf); set `remove_on_destroy = false` for packages the host can't do without.
 - Diagnostics contain paths and operating-system errors, never file content.
 - Run Terraform as an unprivileged user when the configuration doesn't need root, for example when it only manages files in your own directories.
 
@@ -201,7 +203,7 @@ make testacc-docker TF_CLI=tofu TF_CLI_VERSION=1.12.6         # an exact release
 make testacc-docker-matrix                                    # all CLIs tested in CI
 ```
 
-`scripts/install-tf-cli.sh` downloads the CLI and checks it against the release's `SHA256SUMS`. The container gets `CAP_SYS_ADMIN` and no AppArmor profile, so that the tests can mount a tmpfs in the container's own mount namespace. It gets neither `CAP_SYS_MODULE` nor a writable `/proc/sys`, so the acceptance tests of `sysutils_kernel_module` and `sysutils_sysctl` skip themselves there; their unit tests use a fake `modprobe` and a fake `/proc/sys` and always run. On a root host or VM, the acceptance tests load and unload the `dummy` module and change `fs.lease-break-time`, restoring it afterwards, with configuration files in temporary directories.
+`scripts/install-tf-cli.sh` downloads the CLI and checks it against the release's `SHA256SUMS`. The container gets `CAP_SYS_ADMIN` and no AppArmor profile, so that the tests can mount a tmpfs in the container's own mount namespace. It gets neither `CAP_SYS_MODULE` nor a writable `/proc/sys`, so the acceptance tests of `sysutils_kernel_module` and `sysutils_sysctl` skip themselves there; their unit tests use a fake `modprobe` and a fake `/proc/sys` and always run. On a root host or VM, the acceptance tests load and unload the `dummy` module and change `fs.lease-break-time`, restoring it afterwards, with configuration files in temporary directories. The acceptance tests of `sysutils_package` install, pin, upgrade and remove the small `tree` package (override with `SYSUTILS_ACC_PACKAGE`) with whichever of apt, dnf, yum or apk is installed, refreshing the package index first, so they need network access to the distribution's repositories. They skip themselves if the package is already installed, so that they never remove something the host needs; its unit tests use a fake package manager and scripted command output and always run.
 
 The run fails not only when a test fails, but also when a test is skipped. Only the systemd tests may be skipped, because a container has no systemd as PID 1. This way a broken container setup can't silently turn the root-only user, group, chown and file_line tests into skips. Set `ACC_ALLOWED_SKIPS` to an extended regular expression to allow other skip messages. Extra arguments to the script are passed to `go test`, for example:
 
