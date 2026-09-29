@@ -19,12 +19,16 @@ type sysutilsProvider struct {
 	// systemd overrides how sysutils_systemd_unit reaches systemd. It is nil
 	// in production and set by unit tests to a fake systemctl.
 	systemd *systemdConfig
+	// mount overrides the fstab path and mounter of sysutils_mount. It is nil
+	// in production and set by tests to a temporary fstab or a fake mounter.
+	mount *mountConfig
 }
 
 // providerData is passed to resources that implement
 // resource.ResourceWithConfigure.
 type providerData struct {
 	systemd *systemdConfig
+	mount   *mountConfig
 	// root is the directory that the paths of the file, file line, template
 	// file, directory and symlink resources and the file and directory data
 	// sources are confined to; see rootfs.go.
@@ -48,7 +52,7 @@ func (p *sysutilsProvider) Metadata(_ context.Context, _ provider.MetadataReques
 
 func (p *sysutilsProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *provider.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		MarkdownDescription: "The `sysutils` provider exposes a small set of primitives for host-level administration from Terraform: files, directories, symlinks, local users and groups, systemd units, and command execution. " +
+		MarkdownDescription: "The `sysutils` provider exposes a small set of primitives for host-level administration from Terraform: files, directories, symlinks, local users and groups, systemd units, mounts, and command execution. " +
 			"All arguments are optional.",
 		Attributes: map[string]schema.Attribute{
 			"root_dir": schema.StringAttribute{
@@ -88,7 +92,7 @@ func (p *sysutilsProvider) Configure(ctx context.Context, req provider.Configure
 			return
 		}
 	}
-	data := &providerData{systemd: p.systemd, root: root}
+	data := &providerData{systemd: p.systemd, mount: p.mount, root: root}
 	resp.ResourceData = data
 	resp.DataSourceData = data
 }
@@ -162,6 +166,7 @@ func (p *sysutilsProvider) Resources(_ context.Context) []func() resource.Resour
 		NewGroupResource,
 		NewExecResource,
 		NewSystemdUnitResource,
+		NewMountResource,
 	}
 }
 

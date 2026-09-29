@@ -1,6 +1,6 @@
 # terraform-provider-sysutils
 
-A Terraform provider for basic Linux system-administration primitives: files, lines in files, templated files, directories, symlinks, local users and groups, systemd units, and commands. It is meant for bootstrapping hosts where a full configuration-management system would be overkill, and for the last mile of host setup that other providers don't cover.
+A Terraform provider for basic Linux system-administration primitives: files, lines in files, templated files, directories, symlinks, local users and groups, systemd units, mounts, and commands. It is meant for bootstrapping hosts where a full configuration-management system would be overkill, and for the last mile of host setup that other providers don't cover.
 
 The provider acts on the machine Terraform runs on. It has no remote-execution mode.
 
@@ -16,6 +16,7 @@ The provider acts on the machine Terraform runs on. It has no remote-execution m
 | [`sysutils_user`](./docs/resources/user.md) | A local user via `useradd`/`usermod`/`userdel` | Yes, by name | uid, primary gid, home, shell; supplementary groups when `groups` is set | Yes |
 | [`sysutils_group`](./docs/resources/group.md) | A local group and its members via `groupadd`/`groupmod`/`gpasswd`/`groupdel` | Yes, by name | gid; members when `members` is set | Yes |
 | [`sysutils_systemd_unit`](./docs/resources/systemd_unit.md) | A systemd unit file in `/etc/systemd/system`, whether the unit is enabled and whether it is running | Yes, by unit name | Unit file content, enabled, running or stopped | Yes, and systemd as PID 1 |
+| [`sysutils_mount`](./docs/resources/mount.md) | A file system mount and its `/etc/fstab` entry, like Ansible's `mount` module | Yes, by mount point | fstab entry changed or missing; unmounted, a different device or type mounted, or writable although `ro` is set | Yes |
 | [`sysutils_exec`](./docs/resources/exec.md) | A command run at create (and optionally destroy) time, with its exit code and output | No | No: results are recorded once; use `triggers` to re-run | Only if the command needs it |
 
 | Data source | Reads | Requires root |
@@ -117,7 +118,7 @@ The [service account guide](./docs/guides/service-account.md) walks through a co
 
 - [Provider overview and security model](./docs/index.md)
 - [Guide: provisioning a service account and its files](./docs/guides/service-account.md)
-- Resources: [`sysutils_file`](./docs/resources/file.md), [`sysutils_file_line`](./docs/resources/file_line.md), [`sysutils_template_file`](./docs/resources/template_file.md), [`sysutils_directory`](./docs/resources/directory.md), [`sysutils_symlink`](./docs/resources/symlink.md), [`sysutils_user`](./docs/resources/user.md), [`sysutils_group`](./docs/resources/group.md), [`sysutils_systemd_unit`](./docs/resources/systemd_unit.md), [`sysutils_exec`](./docs/resources/exec.md)
+- Resources: [`sysutils_file`](./docs/resources/file.md), [`sysutils_file_line`](./docs/resources/file_line.md), [`sysutils_template_file`](./docs/resources/template_file.md), [`sysutils_directory`](./docs/resources/directory.md), [`sysutils_symlink`](./docs/resources/symlink.md), [`sysutils_user`](./docs/resources/user.md), [`sysutils_group`](./docs/resources/group.md), [`sysutils_systemd_unit`](./docs/resources/systemd_unit.md), [`sysutils_mount`](./docs/resources/mount.md), [`sysutils_exec`](./docs/resources/exec.md)
 - Data sources: [`sysutils_file`](./docs/data-sources/file.md), [`sysutils_directory`](./docs/data-sources/directory.md), [`sysutils_user`](./docs/data-sources/user.md), [`sysutils_group`](./docs/data-sources/group.md)
 - [Examples](./examples)
 
@@ -144,6 +145,7 @@ Terraform state holds every attribute in plain text, and so does anything that h
 - `sysutils_file_line` stores the managed line or block.
 - `sysutils_template_file` stores the template, its variables and the rendered content. With `sensitive_vars`, the rendered content goes into the sensitive `rendered_sensitive` attribute, so it's hidden in plans, but it is still in state.
 - `sysutils_systemd_unit` stores the unit file's contents.
+- `sysutils_mount` stores its mount options, which also end up in the world-readable `/etc/fstab`. Use `credentials=` files instead of `password=` options for network shares.
 
 Don't manage secrets with these resources unless your state backend encrypts data at rest and access to it is restricted. Marking a value `sensitive` only hides it in plans and CLI output; it is still in state.
 

@@ -310,3 +310,32 @@ func isClosed(ch <-chan struct{}) bool {
 		return false
 	}
 }
+
+// runSystemCommand runs an administrative command such as mount(8) or
+// modprobe(8) in the C locale and turns a failure to start, a timeout or a
+// non-zero exit status into an error that quotes the command's own message.
+func runSystemCommand(ctx context.Context, run commandRunner, timeout time.Duration, maxOutput int64, argv ...string) error {
+	res, err := run(ctx, execSpec{
+		Argv:           argv,
+		Env:            append(os.Environ(), "LC_ALL=C"),
+		Timeout:        timeout,
+		MaxOutputBytes: maxOutput,
+	})
+	if err != nil {
+		return fmt.Errorf("%s: %w", strings.Join(argv, " "), err)
+	}
+	if res.TimedOut {
+		return fmt.Errorf("%s: timed out after %s", strings.Join(argv, " "), timeout)
+	}
+	if res.ExitCode != 0 {
+		msg := strings.TrimSpace(res.Stderr.String())
+		if msg == "" {
+			msg = strings.TrimSpace(res.Stdout.String())
+		}
+		if msg == "" {
+			return fmt.Errorf("%s: exit status %d", strings.Join(argv, " "), res.ExitCode)
+		}
+		return fmt.Errorf("%s: exit status %d: %s", strings.Join(argv, " "), res.ExitCode, msg)
+	}
+	return nil
+}
