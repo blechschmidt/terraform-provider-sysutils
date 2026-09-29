@@ -79,7 +79,7 @@ func (p *sysutilsProvider) Schema(_ context.Context, _ provider.SchemaRequest, r
 				MarkdownDescription: "Directory that every managed path is relative to, as if the provider ran in a chroot there. " +
 					"With `root_dir = \"/srv/rootfs\"`, a `sysutils_file` with `path = \"/etc/hosts\"` writes `/srv/rootfs/etc/hosts`. " +
 					"Use it to build a container or OS image root filesystem tree. " +
-					"Applies to the `sysutils_file`, `sysutils_file_line`, `sysutils_template_file`, `sysutils_directory`, `sysutils_symlink` and `sysutils_cron_job` resources and the `sysutils_file` and `sysutils_directory` data sources; " +
+					"Applies to the `sysutils_file`, `sysutils_file_line`, `sysutils_ini_value`, `sysutils_template_file`, `sysutils_directory`, `sysutils_symlink` and `sysutils_cron_job` resources and the `sysutils_file` and `sysutils_directory` data sources; " +
 					"`sysutils_mount`, `sysutils_sysctl`, `sysutils_kernel_module` and `sysutils_package` change the running host and refuse to plan when `root_dir` is set. " +
 					"`path` attributes, ids and import ids keep the path inside the root. " +
 					"Symlinks inside the root are resolved as they would be in a chroot: absolute link targets are relative to `root_dir`, and a link that leads above `root_dir` is an error, so no symlink in the tree can make the provider act outside it. " +
@@ -199,6 +199,7 @@ func (p *sysutilsProvider) Resources(_ context.Context) []func() resource.Resour
 	return []func() resource.Resource{
 		NewFileResource,
 		NewFileLineResource,
+		NewIniValueResource,
 		NewTemplateFileResource,
 		NewDirectoryResource,
 		NewSymlinkResource,
