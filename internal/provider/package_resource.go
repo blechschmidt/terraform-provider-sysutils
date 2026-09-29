@@ -244,8 +244,12 @@ func (r *packageResource) Delete(ctx context.Context, req resource.DeleteRequest
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	cfg.mu.Lock()
-	defer cfg.mu.Unlock()
+	unlock, err := lockPackageManager(ctx)
+	if err != nil {
+		resp.Diagnostics.AddError("Locking package manager", capitalize(err.Error())+".")
+		return
+	}
+	defer unlock()
 	info, err := mgr.Query(ctx, name)
 	if err != nil {
 		resp.Diagnostics.AddError("Querying package", capitalize(err.Error())+".")
@@ -319,8 +323,12 @@ func (r *packageResource) apply(ctx context.Context, plan *packageModel) (change
 		return false, diags
 	}
 
-	cfg.mu.Lock()
-	defer cfg.mu.Unlock()
+	unlock, err := lockPackageManager(ctx)
+	if err != nil {
+		diags.AddError("Locking package manager", capitalize(err.Error())+".")
+		return false, diags
+	}
+	defer unlock()
 	info, err := mgr.Query(ctx, name)
 	if err != nil {
 		diags.AddError("Querying package", capitalize(err.Error())+".")
@@ -467,8 +475,12 @@ func (r *packageResource) refresh(ctx context.Context, m *packageModel) (diags d
 	}
 	name := m.Name.ValueString()
 
-	cfg.mu.Lock()
-	defer cfg.mu.Unlock()
+	unlock, err := lockPackageManager(ctx)
+	if err != nil {
+		diags.AddError("Locking package manager", capitalize(err.Error())+".")
+		return diags
+	}
+	defer unlock()
 	info, err := mgr.Query(ctx, name)
 	if err != nil {
 		diags.AddError("Querying package", capitalize(err.Error())+".")

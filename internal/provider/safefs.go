@@ -335,6 +335,9 @@ func readRegularFileNoFollow(p string, limit int64) ([]byte, *fileSnapshot, erro
 	if snap.xattrs, err = readXattrs(f); err != nil {
 		return nil, nil, fmt.Errorf("reading extended attributes of %q: %w", p, err)
 	}
+	if testHookAfterRead != nil {
+		testHookAfterRead(p)
+	}
 	return data, snap, nil
 }
 

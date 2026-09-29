@@ -85,7 +85,7 @@ With `manager = "auto"`, the default, the provider uses the first package manage
 
 Every command runs directly, with an argument vector and never through a shell, with a 30-minute timeout (2 minutes for queries). The environment is the provider's own plus `LC_ALL=C`, so that output can be parsed, and `DEBIAN_FRONTEND=noninteractive`, `DEBCONF_NONINTERACTIVE_SEEN=true`, `APT_LISTCHANGES_FRONTEND=none`, `APT_LISTBUGS_FRONTEND=none`, `UCF_FORCE_CONFFOLD=1` and `NEEDRESTART_MODE=l`, so that nothing prompts. With apt, configuration files you changed are kept (`--force-confdef --force-confold`), and a dpkg lock held by another process, such as `unattended-upgrades`, is waited for for up to 5 minutes.
 
-Terraform applies independent resources in parallel, but package managers lock their database. The provider therefore runs one package command at a time, so several `sysutils_package` resources never fail each other's lock.
+Terraform applies independent resources in parallel, but package managers lock their database. The provider therefore runs one package operation at a time, also across Terraform runs on the same host and together with changes of [`sysutils_package_repository`](./package_repository.md), so several resources never fail each other's lock; see [Concurrency and Locking](../index.md#concurrency-and-locking).
 
 ## Behavior
 

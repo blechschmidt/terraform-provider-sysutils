@@ -268,7 +268,10 @@ type moduleConfState []byte
 // nil. It reports whether the file changed. An existing file is replaced
 // atomically, keeping its mode, ownership and extended attributes.
 func writeModuleConf(p string, want moduleConfState) (bool, error) {
-	unlock := lockFileForEdit(p)
+	unlock, err := lockFileForEdit(p)
+	if err != nil {
+		return false, err
+	}
 	defer unlock()
 	cur, snap, err := readModuleConf(p)
 	if err != nil {

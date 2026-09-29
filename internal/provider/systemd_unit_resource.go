@@ -507,6 +507,11 @@ func (r *systemdUnitResource) writeUnitFile(m *systemdUnitModel) (bool, error) {
 		return false, err
 	}
 	target := r.unitPath(m.Name.ValueString())
+	unlock, err := lockFileForEdit(target)
+	if err != nil {
+		return false, err
+	}
+	defer unlock()
 	current, snap, err := readRegularFileNoFollow(target, maxUnitFileSize)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):

@@ -250,7 +250,11 @@ func (r *sshAuthorizedKeyResource) apply(ctx context.Context, plan, prev *sshAut
 	defer func() { _ = dir.Close() }()
 	target := account.authorizedKeysPath()
 
-	unlock := lockFileForEdit(target)
+	unlock, err := lockFileForEdit(target)
+	if err != nil {
+		diags.AddError("Locking file", capitalize(err.Error())+".")
+		return diags
+	}
 	defer unlock()
 
 	data, snap, err := dir.readAuthorizedKeys()
@@ -438,7 +442,11 @@ func (r *sshAuthorizedKeyResource) Delete(ctx context.Context, req resource.Dele
 	}
 	defer func() { _ = dir.Close() }()
 
-	unlock := lockFileForEdit(account.authorizedKeysPath())
+	unlock, err := lockFileForEdit(account.authorizedKeysPath())
+	if err != nil {
+		resp.Diagnostics.AddError("Locking file", capitalize(err.Error())+".")
+		return
+	}
 	defer unlock()
 
 	data, snap, err := dir.readAuthorizedKeys()

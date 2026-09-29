@@ -468,7 +468,10 @@ var errCronFileExists = errors.New("file already exists")
 // owner. Extended attributes such as the SELinux label are carried over,
 // except an ACL. With create set, an existing file is an error.
 func writeCronFile(p string, data []byte, uid, gid uint32, create bool) error {
-	unlock := lockFileForEdit(p)
+	unlock, err := lockFileForEdit(p)
+	if err != nil {
+		return err
+	}
 	defer unlock()
 	_, snap, err := readCronFile(p)
 	if err != nil {
@@ -492,7 +495,10 @@ func writeCronFile(p string, data []byte, uid, gid uint32, create bool) error {
 // removeCronFile removes the cron.d file at p. A missing file is not an
 // error; anything other than a regular file is left alone.
 func removeCronFile(p string) error {
-	unlock := lockFileForEdit(p)
+	unlock, err := lockFileForEdit(p)
+	if err != nil {
+		return err
+	}
 	defer unlock()
 	info, err := os.Lstat(p)
 	if errors.Is(err, fs.ErrNotExist) {

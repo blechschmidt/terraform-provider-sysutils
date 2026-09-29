@@ -391,7 +391,10 @@ func setTimezone(ctx context.Context, cfg *timezoneConfig, root *fsRoot, name st
 // ensureLocaltimeLink makes the host path lt of /etc/localtime a symlink to
 // the zone file of name, unless it already is one.
 func ensureLocaltimeLink(lt, name string) error {
-	unlock := lockFileForEdit(lt)
+	unlock, err := lockFileForEdit(lt)
+	if err != nil {
+		return err
+	}
 	defer unlock()
 	cur, err := readLocaltime(lt)
 	if err != nil {
@@ -406,7 +409,10 @@ func ensureLocaltimeLink(lt, name string) error {
 // writeTimezoneFile sets the content of /etc/timezone at the host path p,
 // keeping its mode and owner.
 func writeTimezoneFile(p, content string) error {
-	unlock := lockFileForEdit(p)
+	unlock, err := lockFileForEdit(p)
+	if err != nil {
+		return err
+	}
 	defer unlock()
 	data, snap, err := readRegularFileNoFollow(p, maxTimezoneFileSize)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {
@@ -516,7 +522,10 @@ func restoreTimezone(ctx context.Context, cfg *timezoneConfig, root *fsRoot, s *
 }
 
 func restoreLocaltime(lt string, e localtimeEntry) error {
-	unlock := lockFileForEdit(lt)
+	unlock, err := lockFileForEdit(lt)
+	if err != nil {
+		return err
+	}
 	defer unlock()
 	cur, err := readLocaltime(lt)
 	if err != nil {
@@ -553,7 +562,10 @@ func restoreLocaltime(lt string, e localtimeEntry) error {
 // removeTimezoneFile removes /etc/timezone at the host path p if it is a
 // regular file.
 func removeTimezoneFile(p string) error {
-	unlock := lockFileForEdit(p)
+	unlock, err := lockFileForEdit(p)
+	if err != nil {
+		return err
+	}
 	defer unlock()
 	_, snap, err := readRegularFileNoFollow(p, maxTimezoneFileSize)
 	if errors.Is(err, fs.ErrNotExist) {

@@ -370,7 +370,10 @@ func readSysctlFile(p string) (*textFile, *fileSnapshot, error) {
 // only if edit adds something to it, and a file left without any lines is
 // removed. Concurrent edits by other sysutils resources are serialized.
 func editSysctlFile(p string, edit func(t *textFile) bool) error {
-	unlock := lockFileForEdit(p)
+	unlock, err := lockFileForEdit(p)
+	if err != nil {
+		return err
+	}
 	defer unlock()
 	t, snap, err := readSysctlFile(p)
 	if err != nil {

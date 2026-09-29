@@ -248,7 +248,11 @@ func (r *iniValueResource) Delete(ctx context.Context, req resource.DeleteReques
 		return
 	}
 
-	unlock := lockFileForEdit(target)
+	unlock, err := lockFileForEdit(target)
+	if err != nil {
+		resp.Diagnostics.AddError("Locking file", capitalize(err.Error())+".")
+		return
+	}
 	defer unlock()
 
 	data, snap, err := readRegularFileNoFollow(target, maxFileLineSize)
@@ -327,7 +331,11 @@ func (r *iniValueResource) apply(plan *iniValueModel) diag.Diagnostics {
 		return diags
 	}
 
-	unlock := lockFileForEdit(target)
+	unlock, err := lockFileForEdit(target)
+	if err != nil {
+		diags.AddError("Locking file", capitalize(err.Error())+".")
+		return diags
+	}
 	defer unlock()
 
 	data, snap, err := readRegularFileNoFollow(target, maxFileLineSize)

@@ -522,6 +522,15 @@ func (r *packageRepositoryResource) Create(ctx context.Context, req resource.Cre
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	// Changing the repositories while a package manager command runs, or
+	// two index refreshes at once, would fail or install from a
+	// half-configured repository set.
+	unlock, err := lockPackageManager(ctx)
+	if err != nil {
+		resp.Diagnostics.AddError("Locking package manager", capitalize(err.Error())+".")
+		return
+	}
+	defer unlock()
 	res := r.apply(ctx, &plan, nil, false)
 	resp.Diagnostics.Append(res.diags...)
 	// A repository written before a failure is recorded, so that it is
@@ -541,6 +550,15 @@ func (r *packageRepositoryResource) Update(ctx context.Context, req resource.Upd
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	// Changing the repositories while a package manager command runs, or
+	// two index refreshes at once, would fail or install from a
+	// half-configured repository set.
+	unlock, err := lockPackageManager(ctx)
+	if err != nil {
+		resp.Diagnostics.AddError("Locking package manager", capitalize(err.Error())+".")
+		return
+	}
+	defer unlock()
 	pending := privateBool(ctx, req.Private, repoPrivateRefreshPending)
 	res := r.apply(ctx, &plan, &prior, pending)
 	resp.Diagnostics.Append(res.diags...)
@@ -954,6 +972,15 @@ func (r *packageRepositoryResource) Delete(ctx context.Context, req resource.Del
 		resp.Diagnostics.AddError("Unable to resolve path", fmt.Sprintf("Resolving %s: %s.", p, capitalize(err.Error())))
 		return
 	}
+	// Changing the repositories while a package manager command runs, or
+	// two index refreshes at once, would fail or install from a
+	// half-configured repository set.
+	unlock, err := lockPackageManager(ctx)
+	if err != nil {
+		resp.Diagnostics.AddError("Locking package manager", capitalize(err.Error())+".")
+		return
+	}
+	defer unlock()
 	if family == repoFamilyApk {
 		err = removeApkBlock(host, name, newApkOwner(apkSpecOf(ctx, &state)))
 	} else {
@@ -1018,11 +1045,9 @@ func packageKinds(family string) []string {
 
 // invalidateCache makes sysutils_package resources with update_cache
 // refresh the package index of family again, now that its repositories
-// changed.
+// changed. The caller holds the package-manager lock.
 func (r *packageRepositoryResource) invalidateCache(family string) {
 	cfg := r.pkg.orDefault()
-	cfg.mu.Lock()
-	defer cfg.mu.Unlock()
 	for _, k := range packageKinds(family) {
 		delete(cfg.cacheUpdated, k)
 	}
@@ -1050,8 +1075,6 @@ func (r *packageRepositoryResource) refreshCache(ctx context.Context, family, ki
 	if mgr == nil {
 		return errors.Join(errs...)
 	}
-	cfg.mu.Lock()
-	defer cfg.mu.Unlock()
 	if err := mgr.UpdateCache(ctx); err != nil {
 		return err
 	}
@@ -1096,7 +1119,10 @@ func storedKeySHA256(p string, uid, gid uint32) string {
 // atomically if edit reports a change. A missing file is created with mode
 // 0644.
 func editApkRepositories(p string, edit func(t *textFile) (bool, error)) (bool, error) {
-	unlock := lockFileForEdit(p)
+	unlock, err := lockFileForEdit(p)
+	if err != nil {
+		return false, err
+	}
 	defer unlock()
 	data, snap, err := readRegularFileNoFollow(p, maxRepoFileSize)
 	if err != nil && !errors.Is(err, fs.ErrNotExist) {

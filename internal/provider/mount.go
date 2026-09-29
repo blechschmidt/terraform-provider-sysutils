@@ -397,7 +397,10 @@ func readFstab(p string) (*textFile, *fileSnapshot, error) {
 // if it changed, keeping the file's mode, ownership and extended attributes.
 // Concurrent edits by other sysutils resources are serialized.
 func editFstab(p string, edit func(t *textFile) bool) error {
-	unlock := lockFileForEdit(p)
+	unlock, err := lockFileForEdit(p)
+	if err != nil {
+		return err
+	}
 	defer unlock()
 	t, snap, err := readFstab(p)
 	if err != nil {

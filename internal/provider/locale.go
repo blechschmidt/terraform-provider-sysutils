@@ -293,7 +293,10 @@ func readLocaleFileState(p string) (*localeFileState, error) {
 // the managed variables in vars. With removeIfEmpty set, a file left with
 // nothing but comments and blank lines is removed instead.
 func writeLocaleVars(p string, vars map[string]string, removeIfEmpty bool) error {
-	unlock := lockFileForEdit(p)
+	unlock, err := lockFileForEdit(p)
+	if err != nil {
+		return err
+	}
 	defer unlock()
 	t, snap, err := readLocaleFile(p)
 	if err != nil {
@@ -511,7 +514,10 @@ func (c *localeConfig) generateWithLocaleGen(ctx context.Context, localeGen stri
 		entries = append(entries, e)
 	}
 	err := func() error {
-		unlock := lockFileForEdit(localeGen)
+		unlock, err := lockFileForEdit(localeGen)
+		if err != nil {
+			return err
+		}
 		defer unlock()
 		data, snap, err := readRegularFileNoFollow(localeGen, maxLocaleFileSize)
 		if err != nil {

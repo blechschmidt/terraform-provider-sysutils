@@ -81,4 +81,4 @@ If `/etc/fstab` has an entry for the mount point, `device`, `fstype`, `options`,
 - Only the topmost of several file systems stacked on `path` is managed. Destroy unmounts only that one.
 - Options such as `noauto`, `nofail`, `_netdev` and `x-systemd.*` affect only boot and are written to `/etc/fstab` as given. systemd only picks up changes to `/etc/fstab` after `systemctl daemon-reload`, which the provider does not run. You can run it with [`sysutils_exec`](./exec.md) using `triggers`.
 - The mount options are stored in Terraform state and in the world-readable `/etc/fstab`. For network shares, use `credentials=` files instead of `password=` options.
-- The provider serializes its own edits of `/etc/fstab`, but does not lock the file against other tools. A concurrent edit by another tool is detected and fails the apply instead of being overwritten.
+- The provider [serialises](../index.md#concurrency-and-locking) its own edits of `/etc/fstab`, but does not lock the file against other tools. A concurrent edit by another tool is detected and fails the apply instead of being overwritten.

@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
-	"sync"
 
 	"github.com/hashicorp/terraform-plugin-framework-validators/resourcevalidator"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
@@ -248,7 +247,11 @@ func (r *fileLineResource) Delete(ctx context.Context, req resource.DeleteReques
 		return
 	}
 
-	unlock := lockFileForEdit(target)
+	unlock, err := lockFileForEdit(target)
+	if err != nil {
+		resp.Diagnostics.AddError("Locking file", capitalize(err.Error())+".")
+		return
+	}
 	defer unlock()
 
 	data, snap, err := readRegularFileNoFollow(target, maxFileLineSize)
@@ -339,7 +342,11 @@ func (r *fileLineResource) apply(plan, prev *fileLineModel) diag.Diagnostics {
 		}
 	}
 
-	unlock := lockFileForEdit(target)
+	unlock, err := lockFileForEdit(target)
+	if err != nil {
+		diags.AddError("Locking file", capitalize(err.Error())+".")
+		return diags
+	}
 	defer unlock()
 
 	data, snap, err := readRegularFileNoFollow(target, maxFileLineSize)
@@ -499,21 +506,6 @@ func (m *fileLineModel) allKnown() bool {
 func isRefusedFileType(p string) bool {
 	info, err := os.Lstat(p)
 	return err == nil && !info.Mode().IsRegular()
-}
-
-// fileEditLocks serialises read-modify-write cycles on the same path within
-// this provider process. Terraform applies independent resources in
-// parallel, and several sysutils_file_line resources commonly edit the same
-// file; without the lock their atomic replacements would overwrite each
-// other's changes.
-var fileEditLocks sync.Map // map[string]*sync.Mutex
-
-// lockFileForEdit locks p for editing and returns the unlock function.
-func lockFileForEdit(p string) (unlock func()) {
-	v, _ := fileEditLocks.LoadOrStore(p, &sync.Mutex{})
-	mu := v.(*sync.Mutex)
-	mu.Lock()
-	return mu.Unlock
 }
 
 // singleLineValidator rejects strings containing line breaks.

@@ -18,7 +18,6 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -207,7 +206,8 @@ type packageInfo struct {
 }
 
 // packageManager is a package manager backend. Implementations are not
-// safe for concurrent use; the resource serializes all calls.
+// safe for concurrent use; the resources make all calls with the
+// package-manager lock (lockPackageManager) held.
 type packageManager interface {
 	// Kind returns the manager kind, such as "apt".
 	Kind() string
@@ -242,19 +242,15 @@ type packageConfig struct {
 	// and returns the backend to use. Unit tests use it to install a fake.
 	manager func(kind string) (packageManager, error)
 
-	// mu serializes package operations within the provider process.
-	// Terraform applies independent resources in parallel, but package
-	// managers hold an exclusive lock on their database, so concurrent
-	// installs would fail with lock errors.
-	mu sync.Mutex
 	// cacheUpdated records the kinds whose index was already refreshed in
 	// this provider process, so that many resources with update_cache
-	// refresh it only once per apply.
+	// refresh it only once per apply. It is guarded by the package-manager
+	// lock (lockPackageManager).
 	cacheUpdated map[string]bool
 }
 
 // defaultPackageConfig is used when the provider has no override. It is a
-// single shared value so that all resources share its lock.
+// single shared value so that all resources share its cacheUpdated.
 var defaultPackageConfig = &packageConfig{}
 
 func (c *packageConfig) orDefault() *packageConfig {
@@ -308,7 +304,7 @@ func (c *packageConfig) resolve(kind string) (packageManager, error) {
 }
 
 // updateCacheOnce refreshes the index of m unless that was already done in
-// this provider process. The caller holds c.mu.
+// this provider process. The caller holds the package-manager lock.
 func (c *packageConfig) updateCacheOnce(ctx context.Context, m packageManager) error {
 	if c.cacheUpdated[m.Kind()] {
 		return nil
