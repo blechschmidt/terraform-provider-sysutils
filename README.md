@@ -1,6 +1,6 @@
 # terraform-provider-sysutils
 
-A Terraform provider for basic Linux system-administration primitives: files, lines in files, templated files, directories, symlinks, local users and groups, systemd units, mounts, and commands. It is meant for bootstrapping hosts where a full configuration-management system would be overkill, and for the last mile of host setup that other providers don't cover.
+A Terraform provider for basic Linux system-administration primitives: files, lines in files, templated files, directories, symlinks, local users and groups, systemd units, mounts, kernel parameters, and commands. It is meant for bootstrapping hosts where a full configuration-management system would be overkill, and for the last mile of host setup that other providers don't cover.
 
 The provider acts on the machine Terraform runs on. It has no remote-execution mode.
 
@@ -17,6 +17,7 @@ The provider acts on the machine Terraform runs on. It has no remote-execution m
 | [`sysutils_group`](./docs/resources/group.md) | A local group and its members via `groupadd`/`groupmod`/`gpasswd`/`groupdel` | Yes, by name | gid; members when `members` is set | Yes |
 | [`sysutils_systemd_unit`](./docs/resources/systemd_unit.md) | A systemd unit file in `/etc/systemd/system`, whether the unit is enabled and whether it is running | Yes, by unit name | Unit file content, enabled, running or stopped | Yes, and systemd as PID 1 |
 | [`sysutils_mount`](./docs/resources/mount.md) | A file system mount and its `/etc/fstab` entry, like Ansible's `mount` module | Yes, by mount point | fstab entry changed or missing; unmounted, a different device or type mounted, or writable although `ro` is set | Yes |
+| [`sysutils_sysctl`](./docs/resources/sysctl.md) | A kernel parameter in `/proc/sys` and its `sysctl.d` entry, like `sysctl -w` or Ansible's `sysctl` module | Yes, by name or `name:file` | Running value changed; `sysctl.d` entry missing or changed | Yes |
 | [`sysutils_exec`](./docs/resources/exec.md) | A command run at create (and optionally destroy) time, with its exit code and output | No | No: results are recorded once; use `triggers` to re-run | Only if the command needs it |
 
 | Data source | Reads | Requires root |
@@ -118,7 +119,7 @@ The [service account guide](./docs/guides/service-account.md) walks through a co
 
 - [Provider overview and security model](./docs/index.md)
 - [Guide: provisioning a service account and its files](./docs/guides/service-account.md)
-- Resources: [`sysutils_file`](./docs/resources/file.md), [`sysutils_file_line`](./docs/resources/file_line.md), [`sysutils_template_file`](./docs/resources/template_file.md), [`sysutils_directory`](./docs/resources/directory.md), [`sysutils_symlink`](./docs/resources/symlink.md), [`sysutils_user`](./docs/resources/user.md), [`sysutils_group`](./docs/resources/group.md), [`sysutils_systemd_unit`](./docs/resources/systemd_unit.md), [`sysutils_mount`](./docs/resources/mount.md), [`sysutils_exec`](./docs/resources/exec.md)
+- Resources: [`sysutils_file`](./docs/resources/file.md), [`sysutils_file_line`](./docs/resources/file_line.md), [`sysutils_template_file`](./docs/resources/template_file.md), [`sysutils_directory`](./docs/resources/directory.md), [`sysutils_symlink`](./docs/resources/symlink.md), [`sysutils_user`](./docs/resources/user.md), [`sysutils_group`](./docs/resources/group.md), [`sysutils_systemd_unit`](./docs/resources/systemd_unit.md), [`sysutils_mount`](./docs/resources/mount.md), [`sysutils_sysctl`](./docs/resources/sysctl.md), [`sysutils_exec`](./docs/resources/exec.md)
 - Data sources: [`sysutils_file`](./docs/data-sources/file.md), [`sysutils_directory`](./docs/data-sources/directory.md), [`sysutils_user`](./docs/data-sources/user.md), [`sysutils_group`](./docs/data-sources/group.md)
 - [Examples](./examples)
 
@@ -162,6 +163,7 @@ Don't manage secrets with these resources unless your state backend encrypts dat
 - Every command in `sysutils_exec` runs with the privileges of the user running Terraform. Treat a configuration that contains `sysutils_exec` like a shell script run as that user, and review changes to it accordingly.
 - `force_destroy = true` on `sysutils_directory` deletes everything in the tree, including files Terraform doesn't manage. `/`, a fixed list of critical system directories and paths containing symlinks are refused, but anything else is deleted when you ask for it.
 - `sysutils_user` and `sysutils_group` change `/etc/passwd`, `/etc/group` and `/etc/shadow`. Changing a group's gid doesn't re-own existing files, and changing a user's uid re-owns only the files in their home directory. Fix ownership elsewhere yourself.
+- `sysutils_sysctl` changes the running kernel. A wrong parameter can cut the host off the network or weaken its hardening (for example `kernel.kptr_restrict` or `kernel.yama.ptrace_scope`). Sysctl names are validated so that they can only refer to files below `/proc/sys`.
 - Diagnostics contain paths and operating-system errors, never file content.
 - Run Terraform as an unprivileged user when the configuration doesn't need root, for example when it only manages files in your own directories.
 
@@ -196,7 +198,7 @@ make testacc-docker TF_CLI=tofu TF_CLI_VERSION=1.12.6         # an exact release
 make testacc-docker-matrix                                    # all CLIs tested in CI
 ```
 
-`scripts/install-tf-cli.sh` downloads the CLI and checks it against the release's `SHA256SUMS`. The container gets `CAP_SYS_ADMIN` and no AppArmor profile, so that the tests can mount a tmpfs in the container's own mount namespace.
+`scripts/install-tf-cli.sh` downloads the CLI and checks it against the release's `SHA256SUMS`. The container gets `CAP_SYS_ADMIN` and no AppArmor profile, so that the tests can mount a tmpfs in the container's own mount namespace. It gets no writable `/proc/sys`, so the acceptance tests of `sysutils_sysctl` skip themselves there; its unit tests use a fake `/proc/sys` and always run. On a root host or VM, the acceptance tests change `fs.lease-break-time`, restoring it afterwards, with configuration files in temporary directories.
 
 The run fails not only when a test fails, but also when a test is skipped. Only the systemd tests may be skipped, because a container has no systemd as PID 1. This way a broken container setup can't silently turn the root-only user, group, chown and file_line tests into skips. Set `ACC_ALLOWED_SKIPS` to an extended regular expression to allow other skip messages. Extra arguments to the script are passed to `go test`, for example:
 
