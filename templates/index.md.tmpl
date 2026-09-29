@@ -22,6 +22,8 @@ The `sysutils` provider exposes a small set of primitives for host-level adminis
 |-------------|---------|
 | [`sysutils_directory`](./data-sources/directory.md) | Read a directory's existence, mode, ownership, and entries. |
 | [`sysutils_file`](./data-sources/file.md) | Read an existing file's contents, checksums, mode, ownership, and modification time. |
+| [`sysutils_user`](./data-sources/user.md) | Look up an existing user by name or uid. |
+| [`sysutils_group`](./data-sources/group.md) | Look up an existing group by name or gid. |
 
 It is intended for small bootstrapping tasks where installing and configuring something like Ansible or a full configuration-management system would be overkill.
 

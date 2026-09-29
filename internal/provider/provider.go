@@ -49,5 +49,7 @@ func (p *sysutilsProvider) DataSources(_ context.Context) []func() datasource.Da
 	return []func() datasource.DataSource{
 		NewDirectoryDataSource,
 		NewFileDataSource,
+		NewUserDataSource,
+		NewGroupDataSource,
 	}
 }

@@ -6,11 +6,11 @@ import (
 	"fmt"
 	"os/exec"
 	"os/user"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
 
-	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
@@ -307,34 +307,70 @@ func (r *userResource) refreshState(ctx context.Context, m *userModel, diags *di
 	// Only refresh groups if the user provided them; otherwise leave null to
 	// avoid a permanent diff against whatever supplementary groups exist.
 	if !m.Groups.IsNull() && !m.Groups.IsUnknown() {
-		gids, err := u.GroupIds()
-		if err == nil {
-			names := make([]attr.Value, 0, len(gids))
-			for _, g := range gids {
-				if g == u.Gid {
-					continue
-				}
-				if grp, err := user.LookupGroupId(g); err == nil {
-					names = append(names, types.StringValue(grp.Name))
-				}
-			}
-			set, d := types.SetValue(types.StringType, names)
+		if names, err := supplementaryGroupNames(u); err == nil {
+			set, d := stringSet(names)
 			diags.Append(d...)
 			m.Groups = set
 		}
 	}
 }
 
+// supplementaryGroupNames returns the sorted names of the groups u belongs to,
+// excluding its primary group. Group IDs without a name cannot be referenced
+// by name in a configuration and are left out.
+func supplementaryGroupNames(u *user.User) ([]string, error) {
+	gids, err := u.GroupIds()
+	if err != nil {
+		return nil, err
+	}
+	names := make([]string, 0, len(gids))
+	for _, g := range gids {
+		if g == u.Gid {
+			continue
+		}
+		if grp, err := user.LookupGroupId(g); err == nil {
+			names = append(names, grp.Name)
+		}
+	}
+	sort.Strings(names)
+	return names, nil
+}
+
+// passwdEntry holds the fields of a passwd entry that os/user does not
+// expose in full.
+type passwdEntry struct {
+	// Comment is the complete GECOS field. os/user's User.Name only keeps
+	// the part before the first comma.
+	Comment string
+	Shell   string
+}
+
+// readPasswdEntry looks up username through NSS with getent, so it sees the
+// same databases as os/user.
+func readPasswdEntry(username string) (*passwdEntry, error) {
+	// Not every getent implementation understands "--", so a leading dash
+	// is refused rather than escaped.
+	if username == "" || strings.HasPrefix(username, "-") {
+		return nil, fmt.Errorf("invalid username %q", username)
+	}
+	out, err := exec.Command("getent", "passwd", username).Output()
+	if err != nil {
+		return nil, fmt.Errorf("getent passwd %s: %w", username, err)
+	}
+	// getent may print several lines if the name is not unique; the first
+	// is the one getpwnam, and so os/user, returns.
+	line, _, _ := strings.Cut(string(out), "\n")
+	fields := strings.Split(line, ":")
+	if len(fields) != 7 {
+		return nil, fmt.Errorf("getent passwd %s: expected 7 colon-separated fields, got %d", username, len(fields))
+	}
+	return &passwdEntry{Comment: fields[4], Shell: fields[6]}, nil
+}
+
 func readLoginShell(username string) (string, error) {
-	// Read /etc/passwd to get the login shell (not exposed by os/user).
-	cmd := exec.Command("getent", "passwd", username)
-	out, err := cmd.Output()
+	e, err := readPasswdEntry(username)
 	if err != nil {
 		return "", err
 	}
-	fields := strings.Split(strings.TrimRight(string(out), "\n"), ":")
-	if len(fields) < 7 {
-		return "", fmt.Errorf("unexpected passwd format")
-	}
-	return fields[6], nil
+	return e.Shell, nil
 }

@@ -325,15 +325,46 @@ func stringSet(values []string) (types.Set, diag.Diagnostics) {
 // there is none. The file is parsed directly rather than through os/user
 // because the latter does not expose the member list.
 func lookupGroupEntry(name string) (*groupEntry, error) {
+	return scanGroupFile(func(fields []string) bool { return fields[0] == name })
+}
+
+// lookupGroupEntryByGID returns the first group with the given gid from
+// groupFile, or nil if there is none. Like getgrgid, the first entry wins if
+// several groups share a gid.
+func lookupGroupEntryByGID(gid int64) (*groupEntry, error) {
+	return scanGroupFile(gidMatcher(gid))
+}
+
+func scanGroupFile(match func(fields []string) bool) (*groupEntry, error) {
 	f, err := os.Open(groupFile)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = f.Close() }()
-	return findGroupEntry(f, name)
+	return scanGroupEntries(f, match)
 }
 
 func findGroupEntry(r io.Reader, name string) (*groupEntry, error) {
+	return scanGroupEntries(r, func(fields []string) bool { return fields[0] == name })
+}
+
+func findGroupEntryByGID(r io.Reader, gid int64) (*groupEntry, error) {
+	return scanGroupEntries(r, gidMatcher(gid))
+}
+
+// gidMatcher matches entries by numeric gid. Entries whose gid does not parse
+// cannot be the one asked for and are skipped rather than reported.
+func gidMatcher(gid int64) func(fields []string) bool {
+	return func(fields []string) bool {
+		g, err := strconv.ParseInt(fields[2], 10, 64)
+		return err == nil && g == gid
+	}
+}
+
+// scanGroupEntries returns the first entry in r for whose colon-separated
+// fields match returns true, or nil if there is none. match is only called
+// with exactly four fields.
+func scanGroupEntries(r io.Reader, match func(fields []string) bool) (*groupEntry, error) {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
 	for lineNo := 1; sc.Scan(); lineNo++ {
@@ -346,7 +377,7 @@ func findGroupEntry(r io.Reader, name string) (*groupEntry, error) {
 		if len(fields) != 4 {
 			return nil, fmt.Errorf("%s:%d: expected 4 colon-separated fields, got %d", groupFile, lineNo, len(fields))
 		}
-		if fields[0] != name {
+		if !match(fields) {
 			continue
 		}
 		gid, err := strconv.ParseInt(fields[2], 10, 64)
