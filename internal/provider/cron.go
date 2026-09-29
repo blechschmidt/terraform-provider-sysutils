@@ -485,10 +485,8 @@ func writeCronFile(p string, data []byte, uid, gid uint32, create bool) error {
 				attrs.xattrs[k] = v
 			}
 		}
-	} else if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-		return err
 	}
-	return replaceFileAtomicWith(p, data, snap, attrs)
+	return writeManagedFileWith(p, data, snap, attrs)
 }
 
 // removeCronFile removes the cron.d file at p. A missing file is not an

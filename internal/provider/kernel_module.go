@@ -278,21 +278,9 @@ func writeModuleConf(p string, want moduleConfState) (bool, error) {
 	case want == nil && snap == nil:
 		return false, nil
 	case want == nil:
-		if err := checkUnchanged(p, snap); err != nil {
-			return false, err
-		}
-		if err := os.Remove(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return false, err
-		}
-		syncDir(filepath.Dir(p))
-		return true, nil
+		return true, removeManagedFile(p, snap)
 	case snap != nil && string(cur) == string(want):
 		return false, nil
 	}
-	if snap == nil {
-		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-			return false, err
-		}
-	}
-	return true, replaceFileAtomic(p, want, snap, moduleConfMode)
+	return true, writeManagedFile(p, want, snap, moduleConfMode)
 }

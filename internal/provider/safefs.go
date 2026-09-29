@@ -485,18 +485,23 @@ func writeXattrs(f *os.File, attrs map[string][]byte) error {
 // is rewritten in place through an O_NOFOLLOW descriptor after re-checking
 // its identity; this is not atomic.
 func replaceFileAtomic(target string, data []byte, orig *fileSnapshot, newMode fs.FileMode) error {
-	attrs := replaceAttrs{mode: newMode}
-	if orig != nil {
-		attrs = replaceAttrs{
-			mode:    orig.mode,
-			chown:   true,
-			uid:     orig.uid,
-			gid:     orig.gid,
-			xattrs:  orig.xattrs,
-			dropACL: orig.xattrs[aclAccessXattr] == nil,
-		}
+	return replaceFileAtomicWith(target, data, orig, preservedAttrs(orig, newMode))
+}
+
+// preservedAttrs are the attributes replaceFileAtomic gives the replacement
+// for orig: orig's own, or newMode if orig is nil.
+func preservedAttrs(orig *fileSnapshot, newMode fs.FileMode) replaceAttrs {
+	if orig == nil {
+		return replaceAttrs{mode: newMode}
 	}
-	return replaceFileAtomicWith(target, data, orig, attrs)
+	return replaceAttrs{
+		mode:    orig.mode,
+		chown:   true,
+		uid:     orig.uid,
+		gid:     orig.gid,
+		xattrs:  orig.xattrs,
+		dropACL: orig.xattrs[aclAccessXattr] == nil,
+	}
 }
 
 // replaceAttrs are the attributes replaceFileAtomicWith gives the
@@ -553,6 +558,9 @@ func replaceFileAtomicWith(target string, data []byte, orig *fileSnapshot, attrs
 	if err := checkUnchanged(target, orig); err != nil {
 		return err
 	}
+	if testHookBeforeRename != nil {
+		testHookBeforeRename(target)
+	}
 	if orig == nil {
 		err = renameNoReplace(tmp, target)
 	} else {
@@ -569,6 +577,42 @@ func replaceFileAtomicWith(target string, data []byte, orig *fileSnapshot, attrs
 	}
 	renamed = true
 	syncDir(dir)
+	return nil
+}
+
+// testHookBeforeRename, if set, is called by replaceFileAtomicWith between
+// the last check of target and the rename, so tests can race the rename.
+var testHookBeforeRename func(target string)
+
+// writeManagedFile is replaceFileAtomic for configuration files the provider
+// creates on demand: if orig is nil, the parent directories of p are
+// created with mode 0755 first.
+func writeManagedFile(p string, data []byte, orig *fileSnapshot, newMode fs.FileMode) error {
+	return writeManagedFileWith(p, data, orig, preservedAttrs(orig, newMode))
+}
+
+// writeManagedFileWith is writeManagedFile with explicitly given attributes,
+// as for replaceFileAtomicWith.
+func writeManagedFileWith(p string, data []byte, orig *fileSnapshot, attrs replaceAttrs) error {
+	if orig == nil {
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			return err
+		}
+	}
+	return replaceFileAtomicWith(p, data, orig, attrs)
+}
+
+// removeManagedFile removes the file at p, provided it is still the file
+// described by orig (or still absent if orig is nil), and flushes the
+// directory. A file that is already gone is not an error.
+func removeManagedFile(p string, orig *fileSnapshot) error {
+	if err := checkUnchanged(p, orig); err != nil {
+		return err
+	}
+	if err := os.Remove(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	syncDir(filepath.Dir(p))
 	return nil
 }
 

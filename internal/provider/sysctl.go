@@ -380,19 +380,7 @@ func editSysctlFile(p string, edit func(t *textFile) bool) error {
 		return nil
 	}
 	if len(t.lines) == 0 {
-		if err := checkUnchanged(p, snap); err != nil {
-			return err
-		}
-		if err := os.Remove(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			return err
-		}
-		syncDir(filepath.Dir(p))
-		return nil
+		return removeManagedFile(p, snap)
 	}
-	if snap == nil {
-		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
-			return err
-		}
-	}
-	return replaceFileAtomic(p, t.bytes(), snap, sysctlFileCreateMode)
+	return writeManagedFile(p, t.bytes(), snap, sysctlFileCreateMode)
 }
