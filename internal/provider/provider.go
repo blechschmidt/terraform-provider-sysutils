@@ -36,6 +36,7 @@ func (p *sysutilsProvider) Configure(_ context.Context, _ provider.ConfigureRequ
 func (p *sysutilsProvider) Resources(_ context.Context) []func() resource.Resource {
 	return []func() resource.Resource{
 		NewFileResource,
+		NewDirectoryResource,
 		NewUserResource,
 		NewExecResource,
 	}
