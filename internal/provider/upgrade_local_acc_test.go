@@ -889,3 +889,49 @@ resource "sysutils_hosts_entry" "v6" {
 		CheckDestroy: checkFileText(p, orig),
 	})
 }
+
+func TestAccUpgradeLocal_timezone(t *testing.T) {
+	// Below a root_dir, so that the host's time zone is left alone.
+	root := testTimezoneRoot(t, "etc/debian_version")
+	lt := filepath.Join(root, "etc", "localtime")
+	mustSymlink(t, "/usr/share/zoneinfo/Etc/UTC", lt)
+	resource.Test(t, resource.TestCase{
+		Steps: localUpgradeSteps(t, "sysutils_timezone", fmt.Sprintf(`
+provider "sysutils" {
+  root_dir = %q
+}
+
+resource "sysutils_timezone" "test" {
+  timezone           = "Europe/Berlin"
+  restore_on_destroy = true
+}
+`, root)),
+		// The private state recorded by the baseline still restores.
+		CheckDestroy: resource.ComposeAggregateTestCheckFunc(
+			checkSymlinkTarget(lt, "/usr/share/zoneinfo/Etc/UTC"),
+			checkPathGone(filepath.Join(root, "etc", "timezone")),
+		),
+	})
+}
+
+func TestAccUpgradeLocal_locale(t *testing.T) {
+	// Below a root_dir, so that the host's locale is left alone.
+	root := testRootDir(t)
+	p := filepath.Join(root, "etc", "default", "locale")
+	mustWrite(t, filepath.Join(root, "etc", "debian_version"), "12.5\n")
+	mustWrite(t, p, "LANG=C.UTF-8\n")
+	resource.Test(t, resource.TestCase{
+		Steps: localUpgradeSteps(t, "sysutils_locale", fmt.Sprintf(`
+provider "sysutils" {
+  root_dir = %q
+}
+
+resource "sysutils_locale" "test" {
+  lang               = "en_US.UTF-8"
+  lc                 = { LC_TIME = "en_GB.UTF-8" }
+  restore_on_destroy = true
+}
+`, root)),
+		CheckDestroy: checkFileText(p, "LANG=C.UTF-8\n"),
+	})
+}

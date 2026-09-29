@@ -15,13 +15,17 @@ ARG TF_CLI_VERSION=latest
 
 # passwd: useradd/groupadd for the user and group tests.
 # acl, attr: setfacl/getfattr for the extended attribute tests.
+# locales, tzdata: locale-gen and zone files for the locale and time zone
+# tests.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         acl \
         attr \
         ca-certificates \
         curl \
+        locales \
         passwd \
+        tzdata \
         unzip \
     && rm -rf /var/lib/apt/lists/*
 
