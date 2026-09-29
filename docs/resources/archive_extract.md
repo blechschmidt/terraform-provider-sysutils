@@ -99,7 +99,7 @@ output "installed_plugin_files" {
 - `directory_mode` (String) Octal mode for every extracted directory, and for `destination` if the resource creates it, such as `"0755"`. If unset, each directory gets the permission bits recorded in the archive, without special bits and without write permission for group and others; directories the archive has no entry for, and a created `destination`, get `0755`.
 - `file_mode` (String) Octal mode for every extracted regular file, such as `"0644"`. If unset, each file gets the permission bits recorded in the archive, without setuid, setgid and sticky bits and without write permission for group and others (as with a umask of `022`).
 - `group` (String) Group name or numeric GID of every extracted entry. Requires privileges. If unset, extracted entries get the primary group of the user running Terraform.
-- `max_entries` (Number) Maximum number of entries in the archive, including those that `strip_components` skips. A larger archive is refused before anything is extracted. Defaults to `100000`.
+- `max_entries` (Number) Maximum number of entries in the archive, including those that `strip_components` skips and directories that the archive does not list but that its entries are in. A larger archive is refused before anything is extracted. Defaults to `100000`.
 - `max_size` (Number) Maximum total size of the archive's contents in bytes, after decompression. A larger archive is refused before anything is extracted, which protects against decompression bombs. Defaults to `1073741824` (1 GiB).
 - `overwrite` (Boolean) Replace files, symlinks and special files that exist in `destination` at the paths of the archive's entries but were not extracted by this resource. They then count as extracted and are removed on destroy. Existing directories are always merged into, never replaced. When `false`, such a file makes the extraction fail before anything is changed. Defaults to `false`.
 - `owner` (String) Username or numeric UID that should own every extracted entry. Requires privileges. If unset, extracted entries belong to the user running Terraform; the owners recorded in the archive are never used.
@@ -128,14 +128,14 @@ Only the entry types that tar and zip archives commonly contain are supported: d
 
 Archives are treated as untrusted input. An archive is refused as a whole, during plan when the archive exists then and otherwise before anything is extracted, if any of its entries:
 
-- has an absolute path, a `..` path component or a NUL byte in its name (zip-slip);
+- has an absolute path, a `..` path component or a NUL byte in its name (zip-slip), or a name longer than 4096 bytes;
 - is a symbolic link with an absolute target, or whose target leads above `destination`. Targets are resolved the way the kernel resolves them after extraction, including through the archive's other symlinks. `sub/up -> ..` followed by `sub/x -> up/..` is refused, because `sub/x` leads to the parent of `destination`;
 - is inside another entry that is not a directory, so that a file is never written through a symlink;
 - is a hard link to anything but a regular file earlier in the same archive;
 - is a device node, FIFO or other special file;
 - appears twice, except as a directory;
 
-or if the archive has more than `max_entries` entries, or its contents are larger than `max_size` bytes. Both the sizes declared in the entry headers and the bytes actually decompressed are counted, so a decompression bomb is stopped early. The whole decompressed tar stream, including headers and padding, is capped as well.
+or if the archive has more than `max_entries` entries (counting the directories that its entries are in but that it does not list), or its contents are larger than `max_size` bytes. Both the sizes declared in the entry headers and the bytes actually decompressed are counted, so a decompression bomb is stopped early. The whole decompressed tar stream, including headers and padding, is capped as well.
 
 All changes in `destination` go through directory descriptors opened with `O_NOFOLLOW`, component by component. No symlink in `destination` is ever followed, whether an earlier archive created it or someone else planted it. A symlink at a path where the archive has a file or directory is replaced, and only with `overwrite = true` or if this resource extracted it. It is never written through. Symlinks in the path *of* `destination` are followed, as for every resource (see the [security model](../index.md#security-model)).
 

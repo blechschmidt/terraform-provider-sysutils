@@ -57,7 +57,7 @@ func (r *serviceResource) Schema(_ context.Context, _ resource.SchemaRequest, re
 		Attributes: map[string]schema.Attribute{
 			"name": schema.StringAttribute{
 				Required: true,
-				MarkdownDescription: "Name of the service. With systemd, a unit name such as `\"nginx.service\"`, `\"nginx\"` (short for `nginx.service`), `\"getty@tty2.service\"` or `\"backup.timer\"`; aliases are resolved to the unit they name. " +
+				MarkdownDescription: "Name of the service. With systemd, a unit name such as `\"nginx.service\"`, `\"nginx\"` (short for `nginx.service`), `\"getty@tty2.service\"` or `\"backup.timer\"`; aliases are resolved to the unit they name. A template unit such as `\"getty@.service\"` cannot be managed itself, only its instances. " +
 					"With OpenRC, the name of a script in `/etc/init.d`, such as `\"nginx\"`. Changing this forces a new resource.",
 				Validators:    []validator.String{stringCheck("service name", validateServiceName)},
 				PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace()},

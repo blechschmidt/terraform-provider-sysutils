@@ -131,7 +131,7 @@ func (r *archiveExtractResource) Schema(_ context.Context, _ resource.SchemaRequ
 				Optional: true,
 				Computed: true,
 				Default:  int64default.StaticInt64(defaultArchiveMaxEntries),
-				MarkdownDescription: "Maximum number of entries in the archive, including those that `strip_components` skips. " +
+				MarkdownDescription: "Maximum number of entries in the archive, including those that `strip_components` skips and directories that the archive does not list but that its entries are in. " +
 					"A larger archive is refused before anything is extracted. Defaults to `100000`.",
 				Validators: []validator.Int64{int64validator.AtLeast(1)},
 			},

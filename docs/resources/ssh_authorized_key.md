@@ -65,7 +65,7 @@ resource "sysutils_ssh_authorized_key" "backup" {
 
 ## Matching Keys
 
-A line of `authorized_keys` holds the managed key if it has the same key type and key data, that is, the same `<type> <base64>` pair. Its options and comment do not matter: a line with the same key but another comment or other options is the managed key's line, and apply rewrites it rather than adding a second one. Blank lines, `#` comment lines (including commented-out keys) and lines that `sshd` could not parse are never touched.
+A line of `authorized_keys` holds the managed key if it has the same key type and key data, that is, the same `<type> <base64>` pair. Its options and comment do not matter: a line with the same key but another comment or other options is the managed key's line, and apply rewrites it rather than adding a second one. Blank lines, `#` comment lines (including commented-out keys) and lines that `sshd` could not parse are never touched. Line endings are kept: in a file with CRLF line endings (judged by its first line), the managed line ends with CRLF too.
 
 The provider keeps exactly one line per managed key:
 

@@ -76,6 +76,11 @@ func validateServiceName(name string) error {
 	if !serviceNamePattern.MatchString(name) {
 		return fmt.Errorf("service name %q must consist of ASCII letters, digits, \":\", \"_\", \".\", \"@\", \"\\\" or \"-\", starting with a letter, digit or \"_\"", name)
 	}
+	// systemctl cannot query a template unit such as "getty@.service",
+	// only its instances, and fails with an obscure message.
+	if _, instance, ok := strings.Cut(name, "@"); ok && (instance == "" || instance[0] == '.') {
+		return fmt.Errorf("service name %q is a systemd template unit, which cannot be started or queried itself; name an instance of it, such as %q", name, strings.Replace(name, "@", "@instance", 1))
+	}
 	return nil
 }
 

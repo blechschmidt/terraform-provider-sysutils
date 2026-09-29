@@ -145,7 +145,7 @@ resource "sysutils_ssh_authorized_key" "test" {
 					}
 				},
 				Config:      config,
-				ExpectError: regexp.MustCompile(`is a symbolic\s+link`),
+				ExpectError: regexp.MustCompile(`is\s+a\s+symbolic\s+link`),
 			},
 			{
 				PreConfig: func() {

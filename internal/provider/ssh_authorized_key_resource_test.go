@@ -323,7 +323,7 @@ func TestSSHAuthorizedKeyResource_errors(t *testing.T) {
 			ProtoV6ProviderFactories: sshKeyProviderFactories(home),
 			Steps: []resource.TestStep{{
 				Config:      sshKeyHCL(fmt.Sprintf("key = %q", at)),
-				ExpectError: regexp.MustCompile(`is a symbolic\s+link`),
+				ExpectError: regexp.MustCompile(`is\s+a\s+symbolic\s+link`),
 			}},
 		})
 		if entries, _ := os.ReadDir(victim); len(entries) != 0 {
@@ -347,7 +347,7 @@ func TestSSHAuthorizedKeyResource_errors(t *testing.T) {
 			ProtoV6ProviderFactories: sshKeyProviderFactories(home),
 			Steps: []resource.TestStep{{
 				Config:      sshKeyHCL(fmt.Sprintf("key = %q", at)),
-				ExpectError: regexp.MustCompile(`is a symbolic\s+link`),
+				ExpectError: regexp.MustCompile(`is\s+a\s+symbolic\s+link`),
 			}},
 		})
 		if data, _ := os.ReadFile(victim); string(data) != "do not touch\n" {

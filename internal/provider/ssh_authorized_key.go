@@ -218,12 +218,22 @@ func removeAuthorizedKey(t *textFile, match sshKeyMatcher) (changed bool, at int
 // line whose key and options allow the login, so a duplicate without, say,
 // a from= restriction would defeat the restriction on the managed line. A
 // missing key is inserted at hint if hint >= 0, and appended otherwise.
+// Line endings are kept: in a file with CRLF line endings, the line ends
+// with CRLF as well.
 func ensureAuthorizedKey(t *textFile, match sshKeyMatcher, line string, hint int) bool {
 	indices, _ := findAuthorizedKey(t.lines, match)
 	if len(indices) == 0 {
 		idx := hint
-		if idx < 0 {
+		if idx < 0 || idx > len(t.lines) {
 			idx = len(t.lines)
+		}
+		if usesCRLF(t.lines) {
+			line += "\r"
+			// The new last line gets a newline; the old last one needs
+			// the CR in front of it.
+			if last := len(t.lines) - 1; idx > last && !t.trailingNewline && !strings.HasSuffix(t.lines[last], "\r") {
+				t.lines[last] += "\r"
+			}
 		}
 		t.insert(idx, []string{line})
 		return true
@@ -233,11 +243,20 @@ func ensureAuthorizedKey(t *textFile, match sshKeyMatcher, line string, hint int
 		t.replace(indices[i], indices[i]+1, nil)
 		changed = true
 	}
+	if strings.HasSuffix(t.lines[indices[0]], "\r") {
+		line += "\r"
+	}
 	if t.lines[indices[0]] != line {
 		t.lines[indices[0]] = line
 		changed = true
 	}
 	return changed
+}
+
+// usesCRLF reports whether the lines of a file end with CRLF rather than LF:
+// whether its first line does.
+func usesCRLF(lines []string) bool {
+	return len(lines) > 0 && strings.HasSuffix(lines[0], "\r")
 }
 
 // sshAccount is the user whose authorized_keys file is managed.

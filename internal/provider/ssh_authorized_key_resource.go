@@ -378,7 +378,8 @@ func (r *sshAuthorizedKeyResource) refresh(ctx context.Context, m *sshAuthorized
 
 	matched := make([]string, len(indices))
 	for i, idx := range indices {
-		matched[i] = strings.ToValidUTF8(lines[idx], "�")
+		// line is compared with the planned one, which has no CR.
+		matched[i] = strings.ToValidUTF8(strings.TrimSuffix(lines[idx], "\r"), "�")
 	}
 	fp := sshKeyFingerprint(first.pub)
 	m.Line = types.StringValue(strings.Join(matched, "\n"))

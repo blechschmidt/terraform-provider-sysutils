@@ -8,7 +8,7 @@ package provider
 //
 //   - Names are relative, slash-separated paths. Absolute names, names with a
 //     ".." component and names with NUL bytes are refused, whatever they
-//     would resolve to (zip-slip).
+//     would resolve to (zip-slip), and so are names longer than PATH_MAX.
 //   - Only directories, regular files, symlinks and hard links are accepted.
 //     Device nodes, FIFOs and other special files are refused.
 //   - No entry may be below another entry that is not a directory, so a
@@ -24,7 +24,10 @@ package provider
 //     same archive, so they can never link to a file outside it.
 //   - The number of entries and the total size of the contents are capped,
 //     both as declared in the headers and as actually decompressed, so a
-//     decompression bomb fails early instead of filling the disk.
+//     decompression bomb fails early instead of filling the disk. The
+//     directories that entries are in but that the archive does not list
+//     count as entries too: otherwise a single entry with a deeply nested
+//     name would create thousands of directories.
 
 import (
 	"archive/tar"
@@ -196,6 +199,10 @@ const tarOverheadPerEntry = 16 << 10
 
 // maxSymlinkTargetLen is the longest symlink target accepted, PATH_MAX.
 const maxSymlinkTargetLen = 4096
+
+// maxArchiveNameLen is the longest entry name accepted, after
+// strip_components: PATH_MAX, like symlink targets.
+const maxArchiveNameLen = 4096
 
 // walkArchive reads the archive f, validates every entry as described in the
 // file comment, and calls visit, if not nil, for every entry that survives
@@ -448,6 +455,9 @@ func (w *archiveWalker) add(raw string, e *archiveEntry, content io.Reader) erro
 	if !ok {
 		return nil // Removed by strip_components, or the destination itself.
 	}
+	if len(name) > maxArchiveNameLen {
+		return fmt.Errorf("entry %.64q... has a name longer than %d bytes", name, maxArchiveNameLen)
+	}
 	e.Name = name
 
 	switch e.Kind {
@@ -484,6 +494,10 @@ func (w *archiveWalker) add(raw string, e *archiveEntry, content io.Reader) erro
 				return fmt.Errorf("entry %q is inside %q, which is a %s in the archive, not a directory", raw, parent, pe.Kind)
 			}
 			continue
+		}
+		w.entries++
+		if w.entries > w.lim.maxEntries {
+			return fmt.Errorf("the archive has more than %d entries (max_entries), counting the directories its entries are in", w.lim.maxEntries)
 		}
 		w.m.entries[parent] = &archiveEntry{Name: parent, Kind: archiveDir, Mode: 0o755, Implicit: true}
 		w.m.order = append(w.m.order, parent)
@@ -555,19 +569,29 @@ func validateArchiveSymlinkTarget(raw, target string) error {
 // kernel would after extraction, following the other symlinks of the
 // archive, and fails if one leads above the destination.
 func (w *archiveWalker) checkSymlinks() error {
+	work := int64(maxSymlinkCheckWork)
 	for _, name := range w.m.order {
 		e := w.m.entries[name]
 		if e.Kind != archiveSymlink {
 			continue
 		}
-		if err := w.m.resolveSymlink(e); err != nil {
+		if err := w.m.resolveSymlink(e, &work); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (m *archiveManifest) resolveSymlink(link *archiveEntry) error {
+// maxSymlinkCheckWork bounds the bytes of path names that checkSymlinks
+// looks up for a whole archive. Each lookup costs the length of the path
+// resolved so far, so an archive of many symlinks with long targets into
+// deep directories, each leading through other such symlinks, could
+// otherwise keep a plan busy for hours. Real archives stay far below it.
+const maxSymlinkCheckWork = 1 << 28
+
+// resolveSymlink follows link inside the archive. work is the remaining
+// budget of maxSymlinkCheckWork.
+func (m *archiveManifest) resolveSymlink(link *archiveEntry, work *int64) error {
 	var stack []string // Components of the path resolved so far.
 	if dir := path.Dir(link.Name); dir != "." {
 		stack = strings.Split(dir, "/")
@@ -588,7 +612,11 @@ func (m *archiveManifest) resolveSymlink(link *archiveEntry) error {
 			continue
 		}
 		stack = append(stack, c)
-		e := m.entries[strings.Join(stack, "/")]
+		key := strings.Join(stack, "/")
+		if *work -= int64(len(key)); *work < 0 {
+			return fmt.Errorf("the symbolic links of the archive are too complex to check that they stay inside the destination, at %q", link.Name)
+		}
+		e := m.entries[key]
 		if e == nil || e.Kind != archiveSymlink {
 			// Names the archive does not contain are treated as plain
 			// directories: nothing the archive creates is followed there.

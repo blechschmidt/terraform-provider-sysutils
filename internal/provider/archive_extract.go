@@ -217,16 +217,33 @@ func applyExtractAttrs(dirfd int, display string, m *archiveManifest, spec extra
 }
 
 // applyEntryAttrs gives the entry base below pfd the owner, group, mode and
-// modification time of e. It must not be a symlink unless e is one.
+// modification time of e. The entry is pinned with O_PATH and O_NOFOLLOW and
+// must still have e's type, and ownership and mode are changed through that
+// descriptor: a directory of the destination that the archive is merged into
+// may have been swapped since it was checked, for a symlink or for a hard
+// link to another file, and neither may be changed in its place.
 func applyEntryAttrs(pfd int, base string, e *archiveEntry, spec extractSpec) error {
+	fd, err := unix.Openat(pfd, base, unix.O_PATH|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = unix.Close(fd) }()
+	var st unix.Stat_t
+	if err := unix.Fstat(fd, &st); err != nil {
+		return err
+	}
+	if st.Mode&unix.S_IFMT != archiveKindType(e.Kind) {
+		return fmt.Errorf("is no longer a %s; refusing to change it", e.Kind)
+	}
 	if spec.uid >= 0 || spec.gid >= 0 {
-		// Before chmod: chown clears the setuid and setgid bits.
-		if err := unix.Fchownat(pfd, base, spec.uid, spec.gid, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+		// Before chmod: chown clears the setuid and setgid bits. With
+		// AT_EMPTY_PATH, a symlink's own ownership is changed.
+		if err := unix.Fchownat(fd, "", spec.uid, spec.gid, unix.AT_EMPTY_PATH); err != nil {
 			return fmt.Errorf("setting ownership: %w", err)
 		}
 	}
 	if e.Kind != archiveSymlink {
-		if err := unix.Fchmodat(pfd, base, unixModeBits(spec.modeFor(e)), 0); err != nil {
+		if err := chmodPathFD(fd, unixModeBits(spec.modeFor(e))); err != nil {
 			return fmt.Errorf("setting mode: %w", err)
 		}
 	}
@@ -237,6 +254,41 @@ func applyEntryAttrs(pfd int, base string, e *archiveEntry, spec extractSpec) er
 		}
 	}
 	return nil
+}
+
+// archiveKindType returns the S_IFMT file type that an entry of kind k has
+// once extracted.
+func archiveKindType(k archiveKind) uint32 {
+	switch k {
+	case archiveDir:
+		return unix.S_IFDIR
+	case archiveSymlink:
+		return unix.S_IFLNK
+	default:
+		return unix.S_IFREG
+	}
+}
+
+// fchmodatNoFollow changes the mode of name below dirfd, failing with ELOOP
+// if it is a symlink. fchmodat(2) always follows a symlink at name, so a
+// directory of the destination that someone swapped for a symlink since it
+// was checked would have the mode of the link's target changed instead.
+// The entry is pinned with O_PATH and O_NOFOLLOW and changed through that
+// descriptor.
+func fchmodatNoFollow(dirfd int, name string, mode uint32) error {
+	fd, err := unix.Openat(dirfd, name, unix.O_PATH|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = unix.Close(fd) }()
+	var st unix.Stat_t
+	if err := unix.Fstat(fd, &st); err != nil {
+		return err
+	}
+	if st.Mode&unix.S_IFMT == unix.S_IFLNK {
+		return unix.ELOOP
+	}
+	return chmodPathFD(fd, mode)
 }
 
 // installResult is what installArchive did.
@@ -515,7 +567,7 @@ func removeTempTree(dirfd int, name, display string) {
 	}
 	// Extracted directories may lack write or search permission for the
 	// user running Terraform; restore it before descending.
-	_ = unix.Fchmodat(dirfd, name, 0o700, 0)
+	_ = fchmodatNoFollow(dirfd, name, 0o700)
 	if fd, err := unix.Openat(dirfd, name, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0); err == nil {
 		d := os.NewFile(uintptr(fd), display)
 		names, _ := d.Readdirnames(-1)
@@ -737,16 +789,7 @@ func entryConforms(destfd int, dest string, e *archiveEntry, sum []byte, spec ex
 	defer func() { _ = unix.Close(pfd) }()
 	_, base := splitEntryName(e.Name)
 
-	var wantType uint32
-	switch e.Kind {
-	case archiveDir:
-		wantType = unix.S_IFDIR
-	case archiveSymlink:
-		wantType = unix.S_IFLNK
-	default:
-		wantType = unix.S_IFREG
-	}
-	if st.Mode&unix.S_IFMT != wantType {
+	if st.Mode&unix.S_IFMT != archiveKindType(e.Kind) {
 		return false, nil
 	}
 	if (spec.uid >= 0 && st.Uid != uint32(spec.uid)) || (spec.gid >= 0 && st.Gid != uint32(spec.gid)) {

@@ -77,7 +77,7 @@ resource "sysutils_service" "app" {
 
 ### Required
 
-- `name` (String) Name of the service. With systemd, a unit name such as `"nginx.service"`, `"nginx"` (short for `nginx.service`), `"getty@tty2.service"` or `"backup.timer"`; aliases are resolved to the unit they name. With OpenRC, the name of a script in `/etc/init.d`, such as `"nginx"`. Changing this forces a new resource.
+- `name` (String) Name of the service. With systemd, a unit name such as `"nginx.service"`, `"nginx"` (short for `nginx.service`), `"getty@tty2.service"` or `"backup.timer"`; aliases are resolved to the unit they name. A template unit such as `"getty@.service"` cannot be managed itself, only its instances. With OpenRC, the name of a script in `/etc/init.d`, such as `"nginx"`. Changing this forces a new resource.
 
 ### Optional
 
