@@ -814,3 +814,30 @@ resource "sysutils_package_repository" "apk" {
 		),
 	})
 }
+
+func TestAccUpgradeLocal_archiveExtract(t *testing.T) {
+	work := t.TempDir()
+	archive := filepath.Join(work, "app.tar.gz")
+	dest := filepath.Join(work, "app")
+	if err := os.WriteFile(archive, gzipBytes(t, makeTar(t,
+		arDir("app-1.0/"),
+		testEntry{name: "app-1.0/bin/app", typ: tar.TypeReg, body: "#!/bin/sh\n", mode: 0o755},
+		arFile("app-1.0/README", "readme\n"),
+		arSymlink("app-1.0/current", "bin/app"),
+	)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	resource.Test(t, resource.TestCase{
+		Steps: localUpgradeSteps(t, "sysutils_archive_extract", fmt.Sprintf(`
+resource "sysutils_archive_extract" "test" {
+  source           = %q
+  destination      = %q
+  strip_components = 1
+  file_mode        = "0640"
+}
+`, archive, dest),
+			statecheck.ExpectKnownValue("sysutils_archive_extract.test", tfjsonpath.New("drifted_entries"), knownvalue.Int64Exact(0)),
+		),
+		CheckDestroy: checkPathGone(dest),
+	})
+}

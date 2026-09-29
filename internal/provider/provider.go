@@ -59,7 +59,7 @@ type providerData struct {
 	repo         *repoConfig
 	service      *serviceConfig
 	// root is the directory that the paths of the file, file line, template
-	// file, directory, symlink, cron job and package repository resources and the file and
+	// file, directory, symlink, archive extract, cron job and package repository resources and the file and
 	// directory data sources are confined to; see rootfs.go.
 	root *fsRoot
 }
@@ -81,7 +81,7 @@ func (p *sysutilsProvider) Metadata(_ context.Context, _ provider.MetadataReques
 
 func (p *sysutilsProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *provider.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		MarkdownDescription: "The `sysutils` provider exposes a small set of primitives for host-level administration from Terraform: files, directories, symlinks, local users and groups, systemd units and services, mounts, kernel parameters and modules, cron jobs, OS packages and package repositories, and command execution. " +
+		MarkdownDescription: "The `sysutils` provider exposes a small set of primitives for host-level administration from Terraform: files, directories, symlinks, archives, local users and groups, systemd units and services, mounts, kernel parameters and modules, cron jobs, OS packages and package repositories, and command execution. " +
 			"All arguments are optional.",
 		Attributes: map[string]schema.Attribute{
 			"root_dir": schema.StringAttribute{
@@ -89,7 +89,7 @@ func (p *sysutilsProvider) Schema(_ context.Context, _ provider.SchemaRequest, r
 				MarkdownDescription: "Directory that every managed path is relative to, as if the provider ran in a chroot there. " +
 					"With `root_dir = \"/srv/rootfs\"`, a `sysutils_file` with `path = \"/etc/hosts\"` writes `/srv/rootfs/etc/hosts`. " +
 					"Use it to build a container or OS image root filesystem tree. " +
-					"Applies to the `sysutils_file`, `sysutils_file_line`, `sysutils_ini_value`, `sysutils_template_file`, `sysutils_directory`, `sysutils_symlink`, `sysutils_cron_job` and `sysutils_package_repository` resources and the `sysutils_file` and `sysutils_directory` data sources; " +
+					"Applies to the `sysutils_file`, `sysutils_file_line`, `sysutils_ini_value`, `sysutils_template_file`, `sysutils_directory`, `sysutils_symlink`, `sysutils_archive_extract` (its `destination`), `sysutils_cron_job` and `sysutils_package_repository` resources and the `sysutils_file` and `sysutils_directory` data sources; " +
 					"`sysutils_mount`, `sysutils_sysctl`, `sysutils_kernel_module`, `sysutils_service` and `sysutils_package` change the running host and refuse to plan when `root_dir` is set, as does `sysutils_package_repository` with `refresh_cache = true`. " +
 					"`path` attributes, ids and import ids keep the path inside the root. " +
 					"Symlinks inside the root are resolved as they would be in a chroot: absolute link targets are relative to `root_dir`, and a link that leads above `root_dir` is an error, so no symlink in the tree can make the provider act outside it. " +
@@ -213,6 +213,7 @@ func (p *sysutilsProvider) Resources(_ context.Context) []func() resource.Resour
 		NewTemplateFileResource,
 		NewDirectoryResource,
 		NewSymlinkResource,
+		NewArchiveExtractResource,
 		NewUserResource,
 		NewGroupResource,
 		NewExecResource,
