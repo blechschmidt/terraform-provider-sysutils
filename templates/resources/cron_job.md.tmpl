@@ -78,5 +78,5 @@ The file must contain a job line. Its first job, the environment settings before
 - `command` is written verbatim. In a cron command, an unescaped `%` ends the command and the rest is passed to it as standard input, so write `\%` (`"\\%"` in HCL) for a literal `%`, for example in `date +\%F`.
 - Debian's and Ubuntu's cron ignore lines longer than 1000 bytes, so `command` and each environment line are limited to 1000 bytes. Put longer commands in a script.
 - `user` is not checked for existence; cron logs an error and skips the job if the user does not exist. Reference a [`sysutils_user`](./user.md) resource to order the two.
-- The resource does not apply to the directory set with the provider's `root_dir` argument.
+- With the provider's `root_dir` argument set, the file is written to `etc/cron.d` below `root_dir`, for example to add a cron job to an image being built. Symlinks in the tree are resolved inside it, as for `sysutils_file`; `path` stays the path inside the root.
 - Other cron implementations, such as those that do not read `/etc/cron.d` at all, are not supported.

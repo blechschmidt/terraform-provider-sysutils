@@ -8,7 +8,7 @@ description: |-
 
 # sysutils_cron_job (Resource)
 
-Manages a cron job in its own file in `/etc/cron.d`. The file is written atomically with mode `0644` and owned by `root:root`, as cron requires, and removed on destroy. Requires root privileges.
+Manages a cron job in its own file in `/etc/cron.d`, below the provider's `root_dir` if that is set. The file is written atomically with mode `0644` and owned by `root:root`, as cron requires, and removed on destroy. Requires root privileges.
 
 It covers the same ground as Ansible's `cron` module with `cron_file`. Each resource owns one file, `/etc/cron.d/<name>`, with exactly one job in it.
 
@@ -132,5 +132,5 @@ The file must contain a job line. Its first job, the environment settings before
 - `command` is written verbatim. In a cron command, an unescaped `%` ends the command and the rest is passed to it as standard input, so write `\%` (`"\\%"` in HCL) for a literal `%`, for example in `date +\%F`.
 - Debian's and Ubuntu's cron ignore lines longer than 1000 bytes, so `command` and each environment line are limited to 1000 bytes. Put longer commands in a script.
 - `user` is not checked for existence; cron logs an error and skips the job if the user does not exist. Reference a [`sysutils_user`](./user.md) resource to order the two.
-- The resource does not apply to the directory set with the provider's `root_dir` argument.
+- With the provider's `root_dir` argument set, the file is written to `etc/cron.d` below `root_dir`, for example to add a cron job to an image being built. Symlinks in the tree are resolved inside it, as for `sysutils_file`; `path` stays the path inside the root.
 - Other cron implementations, such as those that do not read `/etc/cron.d` at all, are not supported.

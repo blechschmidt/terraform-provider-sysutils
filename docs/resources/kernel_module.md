@@ -114,5 +114,5 @@ terraform import sysutils_kernel_module.br_netfilter br_netfilter
 - Modules built into the kernel are not listed in `/proc/modules` and cannot be managed; the apply fails with an error that says so.
 - `modprobe` is limited to 2 minutes per call, so a module that waits for missing firmware or hardware cannot hang the apply forever.
 - `install` and `remove` commands, blacklists and aliases in `/etc/modprobe.d` apply as they do at boot. A blacklisted module can still be loaded by name.
-- The resource does not apply to the directory set with the provider's `root_dir` argument: it loads modules into the running kernel and writes the configuration of the host.
+- The resource cannot be used with the provider's `root_dir` argument: it loads modules into the running kernel and writes the configuration of the host, so it refuses to plan when `root_dir` is set. Use a separate provider configuration without `root_dir` for it.
 - `/etc/modules-load.d` is read by `systemd-modules-load.service`. Distributions without systemd may need `/etc/modules` instead, which the resource does not manage.

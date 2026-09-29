@@ -283,11 +283,11 @@ func TestSysctlResource_errors(t *testing.T) {
 			},
 			{
 				Config:      sysctlHCL("net.ipv4.ip_forward", "1", "relative.conf", ""),
-				ExpectError: regexp.MustCompile(`Invalid\s+path`),
+				ExpectError: regexp.MustCompile(`must\s+be\s+absolute`),
 				PlanOnly:    true,
 			},
 			{
-				Config:      sysctlHCL("net.ipv4.no_such_parameter", "1", file+".new", ""),
+				Config:      sysctlHCL("net.ipv4.no_such_parameter", "1", file+".new.conf", ""),
 				ExpectError: regexp.MustCompile(`no\s+such\s+kernel\s+parameter`),
 			},
 			// An existing entry is not taken over.
@@ -297,7 +297,7 @@ func TestSysctlResource_errors(t *testing.T) {
 			},
 		},
 	})
-	if _, err := os.Stat(file + ".new"); !os.IsNotExist(err) {
+	if _, err := os.Stat(file + ".new.conf"); !os.IsNotExist(err) {
 		t.Errorf("failed create left a file behind: %v", err)
 	}
 	checkFakeSysctlNow(t, procSys, "net.ipv4.ip_forward", "0")

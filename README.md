@@ -49,7 +49,7 @@ terraform {
 provider "sysutils" {}
 ```
 
-The only provider argument is the optional `root_dir`. It makes the file, file line, template file, directory and symlink resources and the file and directory data sources work inside a directory tree, as if in a chroot, for example to build a container root filesystem:
+The only provider argument is the optional `root_dir`. It makes the file, file line, template file, directory, symlink and cron job resources and the file and directory data sources work inside a directory tree, as if in a chroot, for example to build a container root filesystem:
 
 ```terraform
 provider "sysutils" {
@@ -57,7 +57,7 @@ provider "sysutils" {
 }
 ```
 
-Symlinks in the tree are resolved inside it: absolute link targets are relative to `root_dir`, and a link that leads above `root_dir` is an error. See [Root Directory](./docs/index.md#root-directory).
+Symlinks in the tree are resolved inside it: absolute link targets are relative to `root_dir`, and a link that leads above `root_dir` is an error. The mount, sysctl and kernel module resources change the running host and refuse to plan with `root_dir` set. See [Root Directory](./docs/index.md#root-directory).
 
 ### Requirements
 

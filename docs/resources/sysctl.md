@@ -54,7 +54,7 @@ resource "sysutils_sysctl" "swappiness" {
 
 ### Optional
 
-- `file` (String) The `sysctl.d` file to persist the parameter in. It is created if needed and removed again when its last line is removed. Several `sysutils_sysctl` resources can share a file; comments and other entries in it are kept. Must be an absolute path in canonical form. Defaults to `"/etc/sysctl.d/99-terraform.conf"`.
+- `file` (String) The `sysctl.d` file to persist the parameter in. It is created if needed and removed again when its last line is removed. Several `sysutils_sysctl` resources can share a file; comments and other entries in it are kept. Must be an absolute path in canonical form ending in `.conf`, as `systemd-sysctl` and `sysctl --system` ignore other files. Defaults to `"/etc/sysctl.d/99-terraform.conf"`.
 - `persist` (Boolean) Whether to write `<name> = <value>` to `file`, so that `systemd-sysctl` or `sysctl --system` sets the parameter again at boot. If `false`, any entry for `name` is removed from `file` and the value only lasts until the next reboot. Defaults to `true`.
 
 ### Read-Only

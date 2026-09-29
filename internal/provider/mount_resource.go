@@ -23,6 +23,7 @@ import (
 
 var (
 	_ resource.Resource                   = (*mountResource)(nil)
+	_ resource.ResourceWithModifyPlan     = (*mountResource)(nil)
 	_ resource.ResourceWithConfigure      = (*mountResource)(nil)
 	_ resource.ResourceWithImportState    = (*mountResource)(nil)
 	_ resource.ResourceWithValidateConfig = (*mountResource)(nil)
@@ -35,6 +36,7 @@ const maxStackedUnmounts = 16
 func NewMountResource() resource.Resource { return &mountResource{} }
 
 type mountResource struct {
+	hostOnlyResource
 	cfg *mountConfig
 }
 
@@ -144,6 +146,7 @@ func (r *mountResource) Configure(_ context.Context, req resource.ConfigureReque
 		return
 	}
 	r.cfg = data.mount
+	r.fsRoot = data.root
 }
 
 func (r *mountResource) ValidateConfig(ctx context.Context, req resource.ValidateConfigRequest, resp *resource.ValidateConfigResponse) {

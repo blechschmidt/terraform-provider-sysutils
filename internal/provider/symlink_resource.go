@@ -130,6 +130,10 @@ func (r *symlinkResource) Create(ctx context.Context, req resource.CreateRequest
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	if err := r.checkResolvedTarget(link, target); err != nil {
+		resp.Diagnostics.AddAttributeError(path.Root("target"), "Invalid target", capitalize(err.Error())+".")
+		return
+	}
 
 	if err := os.MkdirAll(filepath.Dir(link), 0o755); err != nil {
 		resp.Diagnostics.AddError("Creating parent directory", err.Error())
@@ -194,6 +198,10 @@ func (r *symlinkResource) Update(ctx context.Context, req resource.UpdateRequest
 	link, diags := resolvePathAttr(r.root(), plan.Path.ValueString(), false)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
+		return
+	}
+	if err := r.checkResolvedTarget(link, target); err != nil {
+		resp.Diagnostics.AddAttributeError(path.Root("target"), "Invalid target", capitalize(err.Error())+".")
 		return
 	}
 
@@ -284,6 +292,19 @@ func (r *symlinkResource) validateTarget(link, target string) error {
 		return err
 	}
 	return r.root().checkSymlinkTargetInRoot(link, target)
+}
+
+// checkResolvedTarget repeats the root_dir check of validateTarget for the
+// link's real location in the tree, link being the resolved host path.
+// Symlinks among the link's ancestors may put it at a different depth than
+// its configured path suggests ("/a/b/link" with "/a/b" a link to "/" is
+// "/link"), so that a relative target that looked safe leads above the root.
+func (r *symlinkResource) checkResolvedTarget(link, target string) error {
+	inRoot, err := r.root().inRoot(link)
+	if err != nil {
+		return err
+	}
+	return r.root().checkSymlinkTargetInRoot(inRoot, target)
 }
 
 // replaceSymlink atomically points link at target: a new symlink is created

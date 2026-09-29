@@ -44,8 +44,8 @@ type providerData struct {
 	kernelModule *kernelModuleConfig
 	cron         *cronConfig
 	// root is the directory that the paths of the file, file line, template
-	// file, directory and symlink resources and the file and directory data
-	// sources are confined to; see rootfs.go.
+	// file, directory, symlink and cron job resources and the file and
+	// directory data sources are confined to; see rootfs.go.
 	root *fsRoot
 }
 
@@ -74,7 +74,8 @@ func (p *sysutilsProvider) Schema(_ context.Context, _ provider.SchemaRequest, r
 				MarkdownDescription: "Directory that every managed path is relative to, as if the provider ran in a chroot there. " +
 					"With `root_dir = \"/srv/rootfs\"`, a `sysutils_file` with `path = \"/etc/hosts\"` writes `/srv/rootfs/etc/hosts`. " +
 					"Use it to build a container or OS image root filesystem tree. " +
-					"Applies to the `sysutils_file`, `sysutils_file_line`, `sysutils_template_file`, `sysutils_directory` and `sysutils_symlink` resources and the `sysutils_file` and `sysutils_directory` data sources; " +
+					"Applies to the `sysutils_file`, `sysutils_file_line`, `sysutils_template_file`, `sysutils_directory`, `sysutils_symlink` and `sysutils_cron_job` resources and the `sysutils_file` and `sysutils_directory` data sources; " +
+					"`sysutils_mount`, `sysutils_sysctl` and `sysutils_kernel_module` change the running host and refuse to plan when `root_dir` is set. " +
 					"`path` attributes, ids and import ids keep the path inside the root. " +
 					"Symlinks inside the root are resolved as they would be in a chroot: absolute link targets are relative to `root_dir`, and a link that leads above `root_dir` is an error, so no symlink in the tree can make the provider act outside it. " +
 					"Must be an absolute path in canonical form; symlinks in `root_dir` itself are followed. It must exist when a resource or data source is read or applied. " +
@@ -147,6 +148,26 @@ func (r *rootedResource) root() *fsRoot {
 		return hostRoot
 	}
 	return r.fsRoot
+}
+
+// hostOnlyResource is embedded by resources that act on the running host
+// itself (its kernel or mount table) rather than on files in a tree, and so
+// cannot honour root_dir. Its ModifyPlan refuses to plan their creation or
+// update when root_dir is set: silently changing the host of a provider
+// configured to build an image tree would defeat the purpose of root_dir.
+// Destroy is still allowed, so that resources created before root_dir was
+// set can be removed.
+type hostOnlyResource struct {
+	fsRoot *fsRoot
+}
+
+func (h *hostOnlyResource) ModifyPlan(_ context.Context, req resource.ModifyPlanRequest, resp *resource.ModifyPlanResponse) {
+	if req.Plan.Raw.IsNull() || h.fsRoot.isHost() {
+		return
+	}
+	resp.Diagnostics.AddError("Not supported with root_dir",
+		fmt.Sprintf("This resource changes the running host, not files below root_dir, so it cannot be used with root_dir = %q. "+
+			"Manage it with a separate provider configuration without root_dir, for example through a provider alias.", h.fsRoot.String()))
 }
 
 // rootedDataSource is the data source counterpart of rootedResource.

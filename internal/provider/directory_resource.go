@@ -375,8 +375,18 @@ func (r *directoryResource) Delete(ctx context.Context, req resource.DeleteReque
 
 	if state.ForceDestroy.ValueBool() {
 		// removeAllNoFollow checks the host path; the path inside root_dir
-		// is held to the same list of protected directories.
-		if err := validateRecursivelyRemovable(state.Path.ValueString()); err != nil {
+		// is held to the same list of protected directories. Symlinks in
+		// the tree may have redirected the configured path ("/a/etc" with
+		// "/a" a link to "/" is "/etc"), so both it and the path it
+		// resolved to are checked.
+		inRoot, err := r.root().inRoot(target)
+		if err == nil {
+			err = validateRecursivelyRemovable(state.Path.ValueString())
+		}
+		if err == nil {
+			err = validateRecursivelyRemovable(inRoot)
+		}
+		if err != nil {
 			resp.Diagnostics.AddError("Removing directory", capitalize(err.Error())+".")
 			return
 		}

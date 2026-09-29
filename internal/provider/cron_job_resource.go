@@ -29,6 +29,8 @@ func NewCronJobResource() resource.Resource { return &cronJobResource{} }
 
 type cronJobResource struct {
 	cfg *cronConfig
+	// root is the provider's root_dir; the cron.d file is inside it.
+	root *fsRoot
 }
 
 type cronJobModel struct {
@@ -52,7 +54,7 @@ func (r *cronJobResource) Metadata(_ context.Context, req resource.MetadataReque
 
 func (r *cronJobResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		MarkdownDescription: "Manages a cron job in its own file in `/etc/cron.d`. " +
+		MarkdownDescription: "Manages a cron job in its own file in `/etc/cron.d`, below the provider's `root_dir` if that is set. " +
 			"The file is written atomically with mode `0644` and owned by `root:root`, as cron requires, and removed on destroy. " +
 			"Requires root privileges.",
 		Attributes: map[string]schema.Attribute{
@@ -139,7 +141,16 @@ func (r *cronJobResource) Configure(_ context.Context, req resource.ConfigureReq
 	resp.Diagnostics.Append(diags...)
 	if data != nil {
 		r.cfg = data.cron
+		r.root = data.root
 	}
+}
+
+// hostPath returns the host path of the cron.d file of the job name, which
+// must be valid, resolved inside root_dir like the paths of the file
+// resources, so that neither root_dir nor a symlink in the tree can make the
+// resource write a system crontab of the host.
+func (r *cronJobResource) hostPath(name string) (string, error) {
+	return r.root.resolve(r.cfg.jobPath(name))
 }
 
 // ModifyPlan sets the computed attributes to what apply writes, so that
@@ -255,9 +266,14 @@ func (r *cronJobResource) write(ctx context.Context, plan *cronJobModel, create 
 		return diags
 	}
 	p := r.cfg.jobPath(name)
+	host, err := r.hostPath(name)
+	if err != nil {
+		diags.AddAttributeError(path.Root("name"), "Unable to resolve path", capitalize(err.Error())+".")
+		return diags
+	}
 	uid, gid := r.cfg.owner()
 	content := job.render()
-	if err := writeCronFile(p, content, uid, gid, create); err != nil {
+	if err := writeCronFile(host, content, uid, gid, create); err != nil {
 		if errors.Is(err, errCronFileExists) {
 			diags.AddAttributeError(path.Root("name"), "Cron job already exists",
 				fmt.Sprintf("%s already exists. Import it with \"terraform import\" instead, or remove the file.", p))
@@ -304,7 +320,12 @@ func (r *cronJobResource) refresh(ctx context.Context, m *cronJobModel) (gone bo
 	}
 	imported := m.Schedule.IsNull()
 	p := r.cfg.jobPath(name)
-	data, snap, err := readCronFile(p)
+	host, err := r.hostPath(name)
+	if err != nil {
+		diags.AddError("Unable to resolve path", capitalize(err.Error())+".")
+		return false, diags
+	}
+	data, snap, err := readCronFile(host)
 	if err != nil {
 		diags.AddError("Reading cron job", fmt.Sprintf("Reading %s: %s.", p, err))
 		return false, diags
@@ -371,7 +392,12 @@ func (r *cronJobResource) Delete(ctx context.Context, req resource.DeleteRequest
 		return
 	}
 	p := r.cfg.jobPath(name)
-	if err := removeCronFile(p); err != nil {
+	host, err := r.hostPath(name)
+	if err != nil {
+		resp.Diagnostics.AddError("Unable to resolve path", capitalize(err.Error())+".")
+		return
+	}
+	if err := removeCronFile(host); err != nil {
 		resp.Diagnostics.AddError("Removing cron job", fmt.Sprintf("Removing %s: %s.", p, err))
 	}
 }

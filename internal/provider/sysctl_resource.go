@@ -20,6 +20,7 @@ import (
 
 var (
 	_ resource.Resource                = (*sysctlResource)(nil)
+	_ resource.ResourceWithModifyPlan  = (*sysctlResource)(nil)
 	_ resource.ResourceWithConfigure   = (*sysctlResource)(nil)
 	_ resource.ResourceWithImportState = (*sysctlResource)(nil)
 )
@@ -27,6 +28,7 @@ var (
 func NewSysctlResource() resource.Resource { return &sysctlResource{} }
 
 type sysctlResource struct {
+	hostOnlyResource
 	cfg *sysctlConfig
 }
 
@@ -77,8 +79,8 @@ func (r *sysctlResource) Schema(_ context.Context, _ resource.SchemaRequest, res
 				Default:  stringdefault.StaticString(defaultSysctlFile),
 				MarkdownDescription: "The `sysctl.d` file to persist the parameter in. It is created if needed and removed again when its last line is removed. " +
 					"Several `sysutils_sysctl` resources can share a file; comments and other entries in it are kept. " +
-					"Must be an absolute path in canonical form. Defaults to `\"" + defaultSysctlFile + "\"`.",
-				Validators: []validator.String{absolutePath()},
+					"Must be an absolute path in canonical form ending in `.conf`, as `systemd-sysctl` and `sysctl --system` ignore other files. Defaults to `\"" + defaultSysctlFile + "\"`.",
+				Validators: []validator.String{stringCheck("sysctl.d file", validateSysctlFile)},
 			},
 			"id": schema.StringAttribute{
 				Computed:            true,
@@ -94,6 +96,7 @@ func (r *sysctlResource) Configure(_ context.Context, req resource.ConfigureRequ
 	resp.Diagnostics.Append(diags...)
 	if data != nil {
 		r.cfg = data.sysctl
+		r.fsRoot = data.root
 	}
 }
 
@@ -104,7 +107,7 @@ func (r *sysctlResource) Create(ctx context.Context, req resource.CreateRequest,
 		return
 	}
 	name, file := plan.Name.ValueString(), plan.File.ValueString()
-	if err := validateAbsolutePath(file); err != nil {
+	if err := validateSysctlFile(file); err != nil {
 		resp.Diagnostics.AddAttributeError(path.Root("file"), "Invalid file", capitalize(err.Error())+".")
 		return
 	}
@@ -177,7 +180,7 @@ func (r *sysctlResource) Delete(ctx context.Context, req resource.DeleteRequest,
 		resp.Diagnostics.AddError("Invalid state", capitalize(err.Error())+".")
 		return
 	}
-	if err := validateAbsolutePath(file); err != nil {
+	if err := validateSysctlFile(file); err != nil {
 		resp.Diagnostics.AddError("Invalid state", capitalize(err.Error())+".")
 		return
 	}
@@ -198,7 +201,7 @@ func (r *sysctlResource) ImportState(ctx context.Context, req resource.ImportSta
 			fmt.Sprintf("Import ID must be a sysctl name, optionally followed by \":\" and the absolute path of the sysctl.d file: %s.", err))
 		return
 	}
-	if err := validateAbsolutePath(file); err != nil {
+	if err := validateSysctlFile(file); err != nil {
 		resp.Diagnostics.AddError("Invalid import ID", fmt.Sprintf("Invalid sysctl.d file: %s.", err))
 		return
 	}
@@ -217,7 +220,7 @@ func (r *sysctlResource) apply(plan, prev *sysctlModel) (changed bool, diags dia
 		diags.AddAttributeError(path.Root("name"), "Invalid name", capitalize(err.Error())+".")
 		return false, diags
 	}
-	if err := validateAbsolutePath(file); err != nil {
+	if err := validateSysctlFile(file); err != nil {
 		diags.AddAttributeError(path.Root("file"), "Invalid file", capitalize(err.Error())+".")
 		return false, diags
 	}
@@ -249,7 +252,7 @@ func (r *sysctlResource) apply(plan, prev *sysctlModel) (changed bool, diags dia
 		}
 	}
 
-	if prev != nil && prev.File.ValueString() != file && validateAbsolutePath(prev.File.ValueString()) == nil {
+	if prev != nil && prev.File.ValueString() != file && validateSysctlFile(prev.File.ValueString()) == nil {
 		old := prev.File.ValueString()
 		if err := editSysctlFile(old, func(t *textFile) bool { return removeSysctlEntries(t, name) }); err != nil {
 			diags.AddError("Editing sysctl file", fmt.Sprintf("Removing %s from %s: %s.", name, old, err))
@@ -278,7 +281,7 @@ func (r *sysctlResource) refresh(m *sysctlModel) (gone bool, diags diag.Diagnost
 		diags.AddError("Invalid state", capitalize(err.Error())+".")
 		return false, diags
 	}
-	if err := validateAbsolutePath(file); err != nil {
+	if err := validateSysctlFile(file); err != nil {
 		diags.AddError("Invalid state", capitalize(err.Error())+".")
 		return false, diags
 	}

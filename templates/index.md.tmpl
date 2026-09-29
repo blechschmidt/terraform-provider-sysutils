@@ -65,7 +65,7 @@ By default the provider manages paths on the host as they are written. Set `root
 
 {{ tffile "examples/provider/root_dir.tf" }}
 
-`root_dir` applies to the `sysutils_file`, `sysutils_file_line`, `sysutils_template_file`, `sysutils_directory` and `sysutils_symlink` resources and to the `sysutils_file` and `sysutils_directory` data sources. It does not apply to `source` of `sysutils_file` (a file on the machine running Terraform), and not to users, groups, systemd units, mounts, kernel parameters, kernel modules, cron jobs or commands, which always act on the host. Use a separate, aliased provider configuration to mix both.
+`root_dir` applies to the `sysutils_file`, `sysutils_file_line`, `sysutils_template_file`, `sysutils_directory`, `sysutils_symlink` and `sysutils_cron_job` resources and to the `sysutils_file` and `sysutils_directory` data sources. It does not apply to `source` of `sysutils_file` (a file on the machine running Terraform). `sysutils_mount`, `sysutils_sysctl` and `sysutils_kernel_module` change the running host itself, so they refuse to plan when `root_dir` is set. Users, groups, systemd units and commands always act on the host. Use a separate, aliased provider configuration to mix both.
 
 Paths in the configuration, in the state, in ids and in import ids are always the paths *inside* the root, such as `/etc/nginx/nginx.conf`. Error messages show the host path the provider acted on.
 

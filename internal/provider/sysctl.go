@@ -87,6 +87,13 @@ func sysctlComponents(name string) ([]string, error) {
 	if len(parts) < 2 {
 		return nil, fmt.Errorf("name %q must be in dotted form with at least two components, such as \"net.ipv4.ip_forward\"", name)
 	}
+	if strings.Contains(parts[0], "/") {
+		// sysctl(8) and systemd-sysctl read a key whose first separator is
+		// "/" in the slash-separated form (see canonicalSysctlKey), so the
+		// persisted entry would set a different parameter than the one
+		// written to /proc/sys. No top-level directory has a "." anyway.
+		return nil, fmt.Errorf("name %q must not contain \"/\" in its first component", name)
+	}
 	for i, p := range parts {
 		p = strings.ReplaceAll(p, "/", ".")
 		switch p {
@@ -104,6 +111,21 @@ func sysctlComponents(name string) ([]string, error) {
 func validateSysctlName(name string) error {
 	_, err := sysctlComponents(name)
 	return err
+}
+
+// validateSysctlFile reports why p cannot be the sysctl.d file entries are
+// persisted in. systemd-sysctl and sysctl --system only read files ending in
+// ".conf", so any other file would never take effect; requiring the suffix
+// also keeps the resource from appending entries to unrelated files such as
+// /etc/passwd.
+func validateSysctlFile(p string) error {
+	if err := validateAbsolutePath(p); err != nil {
+		return err
+	}
+	if !strings.HasSuffix(p, ".conf") || filepath.Base(p) == ".conf" {
+		return fmt.Errorf("file %q must be a sysctl.d file with a name ending in \".conf\", such as %q", p, defaultSysctlFile)
+	}
+	return nil
 }
 
 // validateSysctlValue reports why v cannot be written to /proc/sys and to a

@@ -138,7 +138,7 @@ func parseMountInfo(data string) ([]mountEntry, error) {
 		if line == "" {
 			continue
 		}
-		fields := strings.Fields(line)
+		fields := asciiFields(line)
 		sep := slices.Index(fields, "-")
 		if sep < 6 || len(fields) < sep+3 {
 			return nil, fmt.Errorf("malformed mount table line %d: %q", n+1, line)
@@ -183,6 +183,16 @@ func lookupMount(m mounter, mountPoint string) (*mountEntry, error) {
 		return nil, err
 	}
 	return topMount(entries, mountPoint), nil
+}
+
+// asciiFields splits s at runs of spaces and tabs, the only separators of
+// mountinfo and fstab fields (libmount and the kernel escape them as \040
+// and \011). strings.Fields would also split at Unicode spaces such as
+// U+00A0, which may appear unescaped in a field: a FUSE mount point chosen
+// by an unprivileged user could then shift the fields of its line and be
+// mistaken for another mount.
+func asciiFields(s string) []string {
+	return strings.FieldsFunc(s, func(r rune) bool { return r == ' ' || r == '\t' })
 }
 
 // unescapeOctal decodes the \ooo escapes used for white space and
@@ -253,7 +263,7 @@ func (e fstabEntry) equal(o fstabEntry) bool {
 // equals a configured value and is rewritten by the next apply. Fields after
 // the sixth are ignored by mount(8) and here.
 func parseFstabLine(line string) (e fstabEntry, ok bool) {
-	fields := strings.Fields(line)
+	fields := asciiFields(line)
 	if len(fields) < 2 || strings.HasPrefix(fields[0], "#") {
 		return fstabEntry{}, false
 	}
@@ -515,6 +525,11 @@ func validateMountOption(s string) error {
 		if c <= ' ' || c == 0x7f {
 			return fmt.Errorf("mount option %q contains white space or a control character", s)
 		}
+	}
+	if strings.Count(s, `"`)%2 != 0 {
+		// Joined with the other options, an unbalanced quote would make
+		// mount(8) read the following options as part of this one.
+		return fmt.Errorf("mount option %q contains an unbalanced double quote", s)
 	}
 	if parts := splitMountOptions(s); len(parts) != 1 {
 		return fmt.Errorf("mount option %q contains a comma; use one list element per option", s)

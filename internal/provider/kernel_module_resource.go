@@ -20,6 +20,7 @@ import (
 
 var (
 	_ resource.Resource                = (*kernelModuleResource)(nil)
+	_ resource.ResourceWithModifyPlan  = (*kernelModuleResource)(nil)
 	_ resource.ResourceWithConfigure   = (*kernelModuleResource)(nil)
 	_ resource.ResourceWithImportState = (*kernelModuleResource)(nil)
 )
@@ -27,6 +28,7 @@ var (
 func NewKernelModuleResource() resource.Resource { return &kernelModuleResource{} }
 
 type kernelModuleResource struct {
+	hostOnlyResource
 	cfg *kernelModuleConfig
 }
 
@@ -86,6 +88,7 @@ func (r *kernelModuleResource) Configure(_ context.Context, req resource.Configu
 	resp.Diagnostics.Append(diags...)
 	if data != nil {
 		r.cfg = data.kernelModule
+		r.fsRoot = data.root
 	}
 }
 

@@ -186,6 +186,27 @@ func (r *fsRoot) resolvePath(p string, followLast bool) (string, error) {
 	return host(), nil
 }
 
+// inRoot returns the path inside the root of host, a path returned by
+// resolve or resolveFollow. It differs from the managed path that was
+// resolved if symlinks in the tree redirected it: with "/a" a symlink to
+// "/", the managed path "/a/etc" is "/etc" inside the root. Checks that
+// depend on where a path really is, such as the list of protected
+// directories, must use this path rather than the configured one.
+func (r *fsRoot) inRoot(host string) (string, error) {
+	if r.isHost() {
+		return host, nil
+	}
+	base, err := filepath.EvalSymlinks(r.dir)
+	if err != nil {
+		return "", fmt.Errorf("cannot use %q as root_dir: %w", r.dir, err)
+	}
+	rel, err := filepath.Rel(base, host)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, "../") {
+		return "", fmt.Errorf("path %q %w %q", host, errEscapesRoot, r.dir)
+	}
+	return filepath.Join("/", rel), nil
+}
+
 // splitPath splits p into its components. Leading, trailing and duplicate
 // slashes produce empty components, which callers skip.
 func splitPath(p string) []string {
