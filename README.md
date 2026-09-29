@@ -1,6 +1,6 @@
 # terraform-provider-sysutils
 
-A Terraform provider for basic Linux system-administration primitives: files, lines in files, directories, symlinks, local users and groups, and commands. It is meant for bootstrapping hosts where a full configuration-management system would be overkill, and for the last mile of host setup that other providers don't cover.
+A Terraform provider for basic Linux system-administration primitives: files, lines in files, templated files, directories, symlinks, local users and groups, systemd units, and commands. It is meant for bootstrapping hosts where a full configuration-management system would be overkill, and for the last mile of host setup that other providers don't cover.
 
 The provider acts on the machine Terraform runs on. It has no remote-execution mode.
 
@@ -10,10 +10,12 @@ The provider acts on the machine Terraform runs on. It has no remote-execution m
 |----------|---------|:------:|-----------------|---------------|
 | [`sysutils_file`](./docs/resources/file.md) | A file from text, base64 or a local source file; exposes checksums | Yes, by path | Content, mode, owner, group | Only to set `owner`/`group` or write to system paths |
 | [`sysutils_file_line`](./docs/resources/file_line.md) | One line or a marker-delimited block in an existing file, like Ansible's `lineinfile`/`blockinfile` | Yes, by `path:line` or `path:marker` | Line or block missing or changed | Only for files you can't otherwise write, such as `/etc/hosts` |
+| [`sysutils_template_file`](./docs/resources/template_file.md) | A file rendered from a Go or Terraform-syntax template and variables; the template is checked at plan time | Yes, by path | Content (by checksum), mode, owner, group | Only to set `owner`/`group` or write to system paths |
 | [`sysutils_directory`](./docs/resources/directory.md) | A directory, optionally with recursive ownership and modes | Yes, by path | Mode, owner, group; with the recursive options, anywhere in the tree | Only to set `owner`/`group` or write to system paths |
 | [`sysutils_symlink`](./docs/resources/symlink.md) | A symbolic link, switched atomically | Yes, by path | Target, owner, group of the link | Only to set `owner`/`group` or write to system paths |
 | [`sysutils_user`](./docs/resources/user.md) | A local user via `useradd`/`usermod`/`userdel` | Yes, by name | uid, primary gid, home, shell; supplementary groups when `groups` is set | Yes |
 | [`sysutils_group`](./docs/resources/group.md) | A local group and its members via `groupadd`/`groupmod`/`gpasswd`/`groupdel` | Yes, by name | gid; members when `members` is set | Yes |
+| [`sysutils_systemd_unit`](./docs/resources/systemd_unit.md) | A systemd unit file in `/etc/systemd/system`, whether the unit is enabled and whether it is running | Yes, by unit name | Unit file content, enabled, running or stopped | Yes, and systemd as PID 1 |
 | [`sysutils_exec`](./docs/resources/exec.md) | A command run at create (and optionally destroy) time, with its exit code and output | No | No: results are recorded once; use `triggers` to re-run | Only if the command needs it |
 
 | Data source | Reads | Requires root |
@@ -48,7 +50,7 @@ The provider takes no configuration arguments.
 ### Requirements
 
 - Linux. The user and group resources call the `shadow-utils`/`passwd` tools; the file resources rely on Linux-specific system calls.
-- Terraform >= 1.5.
+- Terraform >= 1.5, or OpenTofu. CI runs the acceptance tests against Terraform 1.5, the latest Terraform and the latest OpenTofu.
 - Root privileges for the operations marked in the feature matrix. The provider never elevates privileges itself; run Terraform as root, or with `sudo`, when you need them.
 
 ## Quick example
@@ -107,7 +109,7 @@ The [service account guide](./docs/guides/service-account.md) walks through a co
 
 - [Provider overview and security model](./docs/index.md)
 - [Guide: provisioning a service account and its files](./docs/guides/service-account.md)
-- Resources: [`sysutils_file`](./docs/resources/file.md), [`sysutils_file_line`](./docs/resources/file_line.md), [`sysutils_directory`](./docs/resources/directory.md), [`sysutils_symlink`](./docs/resources/symlink.md), [`sysutils_user`](./docs/resources/user.md), [`sysutils_group`](./docs/resources/group.md), [`sysutils_exec`](./docs/resources/exec.md)
+- Resources: [`sysutils_file`](./docs/resources/file.md), [`sysutils_file_line`](./docs/resources/file_line.md), [`sysutils_template_file`](./docs/resources/template_file.md), [`sysutils_directory`](./docs/resources/directory.md), [`sysutils_symlink`](./docs/resources/symlink.md), [`sysutils_user`](./docs/resources/user.md), [`sysutils_group`](./docs/resources/group.md), [`sysutils_systemd_unit`](./docs/resources/systemd_unit.md), [`sysutils_exec`](./docs/resources/exec.md)
 - Data sources: [`sysutils_file`](./docs/data-sources/file.md), [`sysutils_directory`](./docs/data-sources/directory.md), [`sysutils_user`](./docs/data-sources/user.md), [`sysutils_group`](./docs/data-sources/group.md)
 - [Examples](./examples)
 
@@ -119,7 +121,7 @@ The provider usually runs as root and changes system state directly, so it is wo
 
 A local user who can write to a directory above a managed path could try to plant a symlink there, so that a root-run Terraform writes, `chmod`s or `chown`s a different file, such as `/etc/shadow`.
 
-- The managed path itself is never followed if it is a symlink. `sysutils_file`, `sysutils_file_line` and `sysutils_directory` open it with `O_NOFOLLOW` and fail rather than write through a link. Mode and ownership are changed through the open descriptor, so the path can't be swapped between check and change. `sysutils_symlink` changes the link itself with `lchown`, never its target.
+- The managed path itself is never followed if it is a symlink. `sysutils_file`, `sysutils_file_line`, `sysutils_template_file` and `sysutils_directory` open it with `O_NOFOLLOW` and fail rather than write through a link. Mode and ownership are changed through the open descriptor, so the path can't be swapped between check and change. `sysutils_symlink` changes the link itself with `lchown`, never its target.
 - The `sysutils_file` data source refuses to read through a symlink unless `follow_symlinks = true`.
 - Recursive operations (`force_destroy`, `recursive_owner`, `recursive_mode`) never follow symlinks inside the tree and never cross into another mounted filesystem. `force_destroy` also refuses to run if any component of the path is a symlink.
 - Symlinks in the *parent* components of a path are followed for ordinary operations, so paths under `/var/run` and similar keep working. **Every ancestor directory of a managed path must be writable only by trusted users.** Avoid managing paths inside world-writable directories such as `/tmp` as root.
@@ -131,6 +133,8 @@ Terraform state holds every attribute in plain text, and so does anything that h
 - `sysutils_file` stores `content` and `content_base64` verbatim. For `source`, only the path and checksums are stored.
 - The `sysutils_file` data source stores the file's contents. Don't point it at secrets.
 - `sysutils_file_line` stores the managed line or block.
+- `sysutils_template_file` stores the template, its variables and the rendered content. With `sensitive_vars`, the rendered content goes into the sensitive `rendered_sensitive` attribute, so it's hidden in plans, but it is still in state.
+- `sysutils_systemd_unit` stores the unit file's contents.
 
 Don't manage secrets with these resources unless your state backend encrypts data at rest and access to it is restricted. Marking a value `sensitive` only hides it in plans and CLI output; it is still in state.
 
@@ -159,7 +163,8 @@ Building requires Go (see `go.mod` for the version). Acceptance tests and doc ge
 | `make build` | Build the provider binary `terraform-provider-sysutils` in the repository root. |
 | `make install` | Build and copy the binary into `~/.terraform.d/plugins/` so a local Terraform configuration can use it. |
 | `make test` | Run unit tests. Acceptance tests are skipped, so the host isn't touched. |
-| `make test-docker` | Run the full suite, including acceptance tests, inside a disposable container. **Use this to run acceptance tests.** |
+| `make testacc-docker` | Run the full suite, including acceptance tests, as root inside a disposable container. **Use this to run acceptance tests.** Select the CLI with `TF_CLI=terraform\|tofu` and `TF_CLI_VERSION=<version>\|<prefix>\|latest`. |
+| `make testacc-docker-matrix` | Run `testacc-docker` for every CLI in the CI matrix: Terraform 1.5, Terraform latest and OpenTofu latest. |
 | `make testacc` | Run the acceptance tests directly on the host (requires root). |
 | `make lint` | Run `golangci-lint`. |
 | `make coverage` | Write a test-coverage report to `coverage.html`. |
@@ -170,7 +175,27 @@ Building requires Go (see `go.mod` for the version). Acceptance tests and doc ge
 
 The acceptance tests create real users and groups, write real files under `/tmp` and `/etc`, and run real commands. They run only when `TF_ACC=1` is set **and** the process is root, so a plain `go test ./...` never changes the host.
 
-`make test-docker` builds `Dockerfile.test`, a Debian image with Go, Terraform and the `passwd` tools, and runs `go test ./...` inside it with `TF_ACC=1` as root. The container is removed afterwards, so the host's users, groups and files are never modified. CI uses the same target. Only run `make testacc` on a machine you can afford to change, such as a throwaway VM.
+`make testacc-docker` builds `Dockerfile.test`, a Debian image with Go, the `passwd`, `acl` and `attr` tools and a Terraform or OpenTofu CLI, and runs `scripts/testacc-container.sh` inside it as root. That script runs `go test ./... -count=1` with `TF_ACC=1` against the installed CLI. The container is removed afterwards, so the host's users, groups and files are never modified. Only run `make testacc` on a machine you can afford to change, such as a throwaway VM. (`make test-docker` is an alias for `make testacc-docker`.)
+
+```sh
+make testacc-docker                                           # latest Terraform
+make testacc-docker TF_CLI=terraform TF_CLI_VERSION=1.5       # newest Terraform 1.5.x
+make testacc-docker TF_CLI=tofu TF_CLI_VERSION=latest         # latest OpenTofu
+make testacc-docker TF_CLI=tofu TF_CLI_VERSION=1.12.6         # an exact release
+make testacc-docker-matrix                                    # all CLIs tested in CI
+```
+
+`scripts/install-tf-cli.sh` downloads the CLI and checks it against the release's `SHA256SUMS`. The container gets `CAP_SYS_ADMIN` and no AppArmor profile, so that the tests can mount a tmpfs in the container's own mount namespace.
+
+The run fails not only when a test fails, but also when a test is skipped. Only the systemd tests may be skipped, because a container has no systemd as PID 1. This way a broken container setup can't silently turn the root-only user, group, chown and file_line tests into skips. Set `ACC_ALLOWED_SKIPS` to an extended regular expression to allow other skip messages. Extra arguments to the script are passed to `go test`, for example:
+
+```sh
+docker run --rm --cap-add SYS_ADMIN --security-opt apparmor=unconfined \
+  terraform-provider-sysutils-testacc:terraform-latest \
+  scripts/testacc-container.sh -run 'TestAccUser'
+```
+
+CI runs `make testacc-docker` for each CLI in its matrix (Terraform 1.5, latest Terraform, latest OpenTofu) in the `acceptance` job of `.github/workflows/test.yaml`.
 
 To try a local build against a Terraform configuration, build it and point Terraform at it with a [`dev_overrides`](https://developer.hashicorp.com/terraform/cli/config/config-file#development-overrides-for-provider-developers) block in `~/.terraformrc`:
 

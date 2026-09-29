@@ -1,33 +1,44 @@
-# Integration-test harness.
+# Acceptance-test harness.
 #
 # This image is intentionally disposable: it creates users, writes files, and
-# runs commands against real system state. Running the tests on the host would
-# clobber /tmp and /etc/passwd; running them here does not.
+# runs commands against real system state as root. Running the tests on the
+# host would clobber /tmp and /etc/passwd; running them here does not.
+#
+# TF_CLI selects the CLI the tests drive (terraform or tofu) and
+# TF_CLI_VERSION its version: an exact release, a release prefix such as 1.5
+# (newest 1.5.x), or latest. See "make testacc-docker".
 
 FROM golang:1.25-bookworm
 
-ARG TERRAFORM_VERSION=1.9.8
+ARG TF_CLI=terraform
+ARG TF_CLI_VERSION=latest
 
+# passwd: useradd/groupadd for the user and group tests.
+# acl, attr: setfacl/getfattr for the extended attribute tests.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
+        acl \
+        attr \
         ca-certificates \
         curl \
         passwd \
         unzip \
-    && rm -rf /var/lib/apt/lists/* \
-    && curl -fsSL "https://releases.hashicorp.com/terraform/${TERRAFORM_VERSION}/terraform_${TERRAFORM_VERSION}_linux_amd64.zip" -o /tmp/tf.zip \
-    && unzip /tmp/tf.zip -d /usr/local/bin \
-    && rm /tmp/tf.zip \
-    && terraform version
+    && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /workspace
 
+# Downloaded before the CLI is installed so that this layer is shared by the
+# images for every CLI. Retried because proxy.golang.org occasionally drops
+# connections.
 COPY go.mod go.sum ./
-RUN go mod download
+RUN go mod download || (sleep 10 && go mod download) || (sleep 30 && go mod download)
+
+COPY scripts/install-tf-cli.sh /usr/local/bin/install-tf-cli.sh
+RUN install-tf-cli.sh "${TF_CLI}" "${TF_CLI_VERSION}" /usr/local/bin
 
 COPY . .
 
-ENV TF_ACC=1 \
+ENV TF_CLI=${TF_CLI} \
     CGO_ENABLED=0
 
-CMD ["go", "test", "-count=1", "-timeout", "10m", "./..."]
+CMD ["scripts/testacc-container.sh"]

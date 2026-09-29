@@ -13,11 +13,33 @@ test:
 testacc:
 	TF_ACC=1 go test ./... -v -timeout 30m
 
-# Run integration tests inside a throwaway Docker container so that useradd,
-# file writes, and command execution cannot affect the host system.
-test-docker:
-	docker build -f Dockerfile.test -t terraform-provider-sysutils-tests .
-	docker run --rm terraform-provider-sysutils-tests
+# Run the full suite, including acceptance tests, as root inside a throwaway
+# Docker container so that useradd, chown, file writes and command execution
+# cannot affect the host. TF_CLI is terraform or tofu; TF_CLI_VERSION is an
+# exact release, a prefix such as 1.5 (newest 1.5.x) or latest. CI runs this
+# for every entry of its CLI matrix. SYS_ADMIN and an unconfined AppArmor
+# profile let the tests mount a tmpfs inside the container's own mount
+# namespace; the host's mounts are not affected.
+TF_CLI ?= terraform
+TF_CLI_VERSION ?= latest
+TESTACC_IMAGE = terraform-provider-sysutils-testacc:$(TF_CLI)-$(TF_CLI_VERSION)
+
+testacc-docker:
+	docker build -f Dockerfile.test \
+		--build-arg TF_CLI=$(TF_CLI) \
+		--build-arg TF_CLI_VERSION=$(TF_CLI_VERSION) \
+		-t $(TESTACC_IMAGE) .
+	docker run --rm --cap-add SYS_ADMIN --security-opt apparmor=unconfined \
+		$(TESTACC_IMAGE)
+
+# Run testacc-docker for every CLI in the CI matrix.
+testacc-docker-matrix:
+	$(MAKE) testacc-docker TF_CLI=terraform TF_CLI_VERSION=1.5
+	$(MAKE) testacc-docker TF_CLI=terraform TF_CLI_VERSION=latest
+	$(MAKE) testacc-docker TF_CLI=tofu TF_CLI_VERSION=latest
+
+# Kept for existing scripts and docs.
+test-docker: testacc-docker
 
 coverage:
 	go test ./... -coverprofile=coverage.out -timeout 30m
@@ -46,4 +68,4 @@ docs-check:
 		exit 1; \
 	fi
 
-.PHONY: build install test testacc test-docker coverage lint docs docs-check
+.PHONY: build install test testacc testacc-docker testacc-docker-matrix test-docker coverage lint docs docs-check

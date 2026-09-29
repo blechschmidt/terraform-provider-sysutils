@@ -19,6 +19,6 @@ var testAccProtoV6ProviderFactories = map[string]func() (tfprotov6.ProviderServe
 func requireRoot(t *testing.T) {
 	t.Helper()
 	if os.Geteuid() != 0 {
-		t.Skip("integration test requires root; run inside the test container (make test-docker)")
+		t.Skip("integration test requires root; run inside the test container (make testacc-docker)")
 	}
 }

@@ -39,9 +39,26 @@ jobs:
       - name: Check generated docs are up to date
         run: make docs-check
 
-  integration:
+  # Full suite, including acceptance tests, as root in a disposable container
+  # (make testacc-docker), so that the user, group, chown and file_line tests
+  # run instead of being skipped. The job fails if any test other than the
+  # systemd ones (no systemd as PID 1 in a container) is skipped.
+  acceptance:
+    name: acceptance (${{ matrix.cli }} ${{ matrix.version }})
     runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Oldest supported Terraform release line.
+          - cli: terraform
+            version: '1.5'
+          - cli: terraform
+            version: latest
+          - cli: tofu
+            version: latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - name: Integration tests (Docker)
-        run: make test-docker
+      - name: Acceptance tests (${{ matrix.cli }} ${{ matrix.version }}, root in Docker)
+        run: make testacc-docker TF_CLI=${{ matrix.cli }} TF_CLI_VERSION=${{ matrix.version }}
