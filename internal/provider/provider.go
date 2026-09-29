@@ -47,5 +47,6 @@ func (p *sysutilsProvider) Resources(_ context.Context) []func() resource.Resour
 func (p *sysutilsProvider) DataSources(_ context.Context) []func() datasource.DataSource {
 	return []func() datasource.DataSource{
 		NewDirectoryDataSource,
+		NewFileDataSource,
 	}
 }
