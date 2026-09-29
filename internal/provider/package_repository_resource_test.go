@@ -312,7 +312,8 @@ func TestPackageRepositoryResource_aptKeyURL(t *testing.T) {
 			{
 				// The key behind the URL is not fetched again during plans.
 				PreConfig: func() {
-					other := append(append([]byte{}, testPublicKey...), 0x07)
+					// With a User ID packet.
+					other := append(append([]byte{}, testPublicKey...), 0xcd, 0x01, 'x')
 					env.key.Store(&other)
 				},
 				Config:   config,
@@ -597,6 +598,7 @@ func TestPackageRepositoryResource_existing(t *testing.T) {
 func TestPackageRepositoryResource_validation(t *testing.T) {
 	env := newRepoTestEnv(t, packageManagerApt, "etc/apt")
 	apk := newRepoTestEnv(t, packageManagerApk, "etc/apk")
+	dnf := newRepoTestEnv(t, packageManagerDnf, "etc/yum.repos.d")
 	steps := []struct {
 		env    *repoTestEnv
 		config string
@@ -614,6 +616,8 @@ func TestPackageRepositoryResource_validation(t *testing.T) {
 		{apk, `name = "x"` + "\n" + `uris = ["https://e.com/", "https://f.com/"]`, `exactly\s+one`},
 		{apk, `name = "x"` + "\n" + `uris = ["https://e.com/"]` + "\n" + `signing_key_url = "https://e.com/k"`, `signing\s+key\s+is\s+not\s+supported`},
 		{env, `name = "x"` + "\n" + `manager = "pacman"` + "\n" + `uris = ["https://e.com/"]`, `value\s+must\s+be\s+one\s+of`},
+		// dnf reads gpgkey as a list of URLs: a comma would add a second key.
+		{dnf, `name = "x"` + "\n" + `uris = ["https://e.com/"]` + "\n" + `signing_key_url = "https://e.com/k,https://evil.example/k"`, `must\s+not\s+contain\s+","`},
 	}
 	for i, s := range steps {
 		t.Run(fmt.Sprint(i), func(t *testing.T) {
@@ -695,4 +699,107 @@ func TestPackageRepositoryResource_rootDir(t *testing.T) {
 	if slices.Contains(f.changes(), "update") {
 		t.Error("package index refreshed with root_dir")
 	}
+}
+
+// A create that fails because the repository file already exists removes
+// the key it wrote and records nothing, so that no later destroy of a
+// tainted resource removes the file it does not own.
+func TestPackageRepositoryResource_existingWithKey(t *testing.T) {
+	env := newRepoTestEnv(t, packageManagerApt, "etc/apt/sources.list.d", "etc/apt/keyrings")
+	foreign := env.path("etc/apt/sources.list.d/taken.sources")
+	if err := os.WriteFile(foreign, []byte("Types: deb\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	key := env.path("etc/apt/keyrings/taken.asc")
+	checkForeign := func(*terraform.State) error {
+		if err := checkRepoFile(foreign, "Types: deb\n")(nil); err != nil {
+			return err
+		}
+		return checkRepoGone(key)(nil)
+	}
+	inline := strings.ReplaceAll(testArmoredKey, "\n", "\\n")
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: env.factories(),
+		CheckDestroy:             checkForeign,
+		Steps: []resource.TestStep{
+			{
+				Config: repoHCL(fmt.Sprintf(`
+  name        = "taken"
+  uris        = ["https://example.com/debian"]
+  suites      = ["stable"]
+  components  = ["main"]
+  signing_key = "%s"
+`, inline)),
+				ExpectError: regexp.MustCompile(`already\s+exists`),
+			},
+			{
+				// Would replace a tainted resource, destroying the file.
+				Config: repoHCL(`
+  name       = "other"
+  uris       = ["https://example.com/debian"]
+  suites     = ["stable"]
+  components = ["main"]
+`),
+				Check: checkForeign,
+			},
+		},
+	})
+}
+
+// A line of someone else that follows the marker, because the managed line
+// was deleted by hand, is neither replaced by an update nor removed by
+// destroy.
+func TestPackageRepositoryResource_apkForeignLine(t *testing.T) {
+	env := newRepoTestEnv(t, packageManagerApk, "etc/apk")
+	p := env.path("etc/apk/repositories")
+	orig := "https://dl-cdn.alpinelinux.org/alpine/v3.20/main\n"
+	if err := os.WriteFile(p, []byte(orig), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	marker := "# sysutils_package_repository testing\n"
+	line := "@testing https://dl-cdn.alpinelinux.org/alpine/edge/testing\n"
+	foreign := "https://dl-cdn.alpinelinux.org/alpine/v3.20/community\n"
+	checkFile := func(want string) resource.TestCheckFunc {
+		return func(*terraform.State) error {
+			data, err := os.ReadFile(p)
+			if err != nil {
+				return err
+			}
+			if string(data) != want {
+				return fmt.Errorf("%s =\n%s\nwant\n%s", p, data, want)
+			}
+			return nil
+		}
+	}
+	dropManagedLine := func() { mutateFile(t, p, func(s string) string { return strings.Replace(s, line, "", 1) }) }
+	config := repoHCL(`
+  name = "testing"
+  uris = ["https://dl-cdn.alpinelinux.org/alpine/edge/testing"]
+  tag  = "testing"
+`)
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: env.factories(),
+		CheckDestroy:             checkFile(orig + foreign),
+		Steps: []resource.TestStep{
+			{Config: config, Check: checkFile(orig + marker + line)},
+			{
+				PreConfig: func() {
+					dropManagedLine()
+					mutateFile(t, p, func(s string) string { return s + foreign })
+				},
+				Config: config,
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{plancheck.ExpectResourceAction(testRepoResource, plancheck.ResourceActionUpdate)},
+				},
+				Check: checkFile(orig + marker + line + foreign),
+			},
+			{
+				// The destroy after this step must keep the foreign line.
+				PreConfig:          dropManagedLine,
+				Config:             config,
+				PlanOnly:           true,
+				ExpectNonEmptyPlan: true,
+			},
+		},
+	})
 }

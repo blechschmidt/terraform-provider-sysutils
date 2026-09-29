@@ -21,6 +21,7 @@ import (
 	"os"
 	"regexp"
 	"strings"
+	"syscall"
 	"time"
 	"unicode"
 )
@@ -351,6 +352,9 @@ func (s *repoSpec) validate(family string) error {
 				return fmt.Errorf("URI %q must not contain \",\", which separates the URLs of dnf's baseurl", u)
 			}
 		}
+		if strings.Contains(s.signingKeyURL, ",") {
+			return fmt.Errorf("signing key URL %q must not contain \",\", which separates the URLs of dnf's gpgkey", s.signingKeyURL)
+		}
 		errs = append(errs,
 			notFor("suites", len(s.suites) > 0), notFor("components", len(s.components) > 0),
 			notFor("architectures", len(s.architectures) > 0), notFor("types", len(s.types) > 0),
@@ -612,12 +616,65 @@ func isFalseWord(s string) bool {
 	return false
 }
 
+// apkOwner tells the repository line of a managed block from a line of
+// someone else that merely follows the marker, for instance because the
+// managed line was deleted by hand: a line belongs to the block only if it
+// names one of the resource's URIs or carries one of its tags. Updates and
+// destroy therefore never replace or remove another repository. A nil
+// *apkOwner, used on import, takes any line after the marker.
+type apkOwner struct {
+	uris, tags map[string]bool
+}
+
+// newApkOwner returns the owner of the lines of the given repositories,
+// such as the prior and the planned one of an update.
+func newApkOwner(specs ...*repoSpec) *apkOwner {
+	o := &apkOwner{uris: map[string]bool{}, tags: map[string]bool{}}
+	for _, s := range specs {
+		if s == nil {
+			continue
+		}
+		for _, u := range s.uris {
+			o.uris[u] = true
+		}
+		if s.tag != "" {
+			o.tags[s.tag] = true
+		}
+	}
+	return o
+}
+
+// owns reports whether line, which is not a marker, belongs to the block.
+func (o *apkOwner) owns(line string) bool {
+	if o == nil {
+		return true
+	}
+	_, tag, uri := parseApkLine(line)
+	return (uri != "" && o.uris[uri]) || (tag != "" && o.tags[tag])
+}
+
+// parseApkLine splits a repository line of /etc/apk/repositories into its
+// parts: "#" if disabled, "@tag" and the URL.
+func parseApkLine(line string) (enabled bool, tag, uri string) {
+	line = strings.TrimSpace(line)
+	enabled = true
+	if rest, ok := strings.CutPrefix(line, "#"); ok {
+		enabled = false
+		line = strings.TrimSpace(rest)
+	}
+	if strings.HasPrefix(line, "@") {
+		var rest string
+		tag, rest, _ = strings.Cut(line[1:], " ")
+		line = strings.TrimSpace(rest)
+	}
+	return enabled, tag, line
+}
+
 // apkBlock locates the managed lines of repository name in the lines of
-// /etc/apk/repositories: the marker line and, unless the marker is the
-// last line or followed by another marker, the repository line after it.
-// It returns start < 0 if there is no marker, and the number of markers
-// for name.
-func apkBlock(lines []string, name string) (start, end, count int) {
+// /etc/apk/repositories: the marker line and, if owner owns the line after
+// it, that repository line. It returns start < 0 if there is no marker, and
+// the number of markers for name.
+func apkBlock(lines []string, name string, owner *apkOwner) (start, end, count int) {
 	start = -1
 	for i, l := range lines {
 		if n, _, ok := parseApkMarker(l); ok && n == name {
@@ -626,7 +683,7 @@ func apkBlock(lines []string, name string) (start, end, count int) {
 				start = i
 				end = i + 1
 				if i+1 < len(lines) {
-					if _, _, next := parseApkMarker(lines[i+1]); !next {
+					if _, _, next := parseApkMarker(lines[i+1]); !next && owner.owns(lines[i+1]) {
 						end = i + 2
 					}
 				}
@@ -648,26 +705,18 @@ func parseApkMarker(line string) (name, description string, ok bool) {
 }
 
 // parseApkRepo parses the managed lines of repository name.
-func parseApkRepo(name string, lines []string) (parsedRepo, bool) {
+func parseApkRepo(name string, lines []string, owner *apkOwner) (parsedRepo, bool) {
 	p := parsedRepo{repoSpec: repoSpec{name: name, enabled: true, gpgCheck: true}}
-	start, end, _ := apkBlock(lines, name)
+	start, end, _ := apkBlock(lines, name, owner)
 	if start < 0 {
 		return p, false
 	}
 	_, p.description, _ = parseApkMarker(lines[start])
 	if end == start+2 {
-		line := strings.TrimSpace(lines[start+1])
-		if rest, ok := strings.CutPrefix(line, "#"); ok {
-			p.enabled = false
-			line = strings.TrimSpace(rest)
-		}
-		if strings.HasPrefix(line, "@") {
-			tag, rest, _ := strings.Cut(line[1:], " ")
-			p.tag = tag
-			line = strings.TrimSpace(rest)
-		}
-		if line != "" {
-			p.uris = []string{line}
+		var uri string
+		p.enabled, p.tag, uri = parseApkLine(lines[start+1])
+		if uri != "" {
+			p.uris = []string{uri}
 		}
 	}
 	return p, true
@@ -676,14 +725,14 @@ func parseApkRepo(name string, lines []string) (parsedRepo, bool) {
 // setApkBlock replaces or appends the managed lines of repository name in
 // t, and removes further blocks of the same name. It reports whether t
 // changed.
-func setApkBlock(t *textFile, name string, block []string) bool {
+func setApkBlock(t *textFile, name string, block []string, owner *apkOwner) bool {
 	before := string(t.bytes())
-	start, end, _ := apkBlock(t.lines, name)
+	start, end, _ := apkBlock(t.lines, name, owner)
 	if start < 0 {
 		t.lines = append(t.lines, block...)
 	} else {
 		t.replace(start, end, block)
-		removeApkBlocks(t, name, start+len(block))
+		removeApkBlocks(t, name, start+len(block), owner)
 	}
 	t.trailingNewline = true
 	return string(t.bytes()) != before
@@ -691,10 +740,10 @@ func setApkBlock(t *textFile, name string, block []string) bool {
 
 // removeApkBlocks removes all managed lines of repository name from line
 // from onwards, and reports whether there were any.
-func removeApkBlocks(t *textFile, name string, from int) bool {
+func removeApkBlocks(t *textFile, name string, from int, owner *apkOwner) bool {
 	removed := false
 	for {
-		start, end, _ := apkBlock(t.lines[from:], name)
+		start, end, _ := apkBlock(t.lines[from:], name, owner)
 		if start < 0 {
 			return removed
 		}
@@ -703,8 +752,12 @@ func removeApkBlocks(t *textFile, name string, from int) bool {
 	}
 }
 
-// OpenPGP packet tag of a public key.
-const pgpPublicKeyTag = 6
+// OpenPGP packet tags (RFC 4880, section 4.3).
+const (
+	pgpSecretKeyTag    = 5
+	pgpPublicKeyTag    = 6
+	pgpSecretSubkeyTag = 7
+)
 
 const (
 	pgpArmorBegin = "-----BEGIN PGP PUBLIC KEY BLOCK-----"
@@ -735,11 +788,19 @@ func normalizeSigningKey(key []byte) ([]byte, error) {
 		if tag != pgpPublicKeyTag {
 			return nil, fmt.Errorf("signing key is binary OpenPGP data, but starts with a packet of type %d instead of a public key", tag)
 		}
+		if err := checkNoSecretPackets(key); err != nil {
+			return nil, err
+		}
 		return armorPublicKey(key), nil
 	}
 	text := strings.TrimSpace(strings.ReplaceAll(string(key), "\r\n", "\n"))
 	if !strings.HasPrefix(text, pgpArmorBegin) || !strings.HasSuffix(text, pgpArmorEnd) {
 		return nil, fmt.Errorf("signing key must be an OpenPGP public key, either ASCII-armored (starting with %q and ending with %q) or binary", pgpArmorBegin, pgpArmorEnd)
+	}
+	// Further blocks after the first are kept as they are, so none of them
+	// may be a private key.
+	if strings.Contains(text, "PRIVATE KEY BLOCK") || strings.Contains(text, "SECRET KEY BLOCK") {
+		return nil, errors.New("signing key contains a private key block, which must never be stored in a world-readable file")
 	}
 	body, err := dearmorBody(text)
 	if err != nil {
@@ -748,7 +809,101 @@ func normalizeSigningKey(key []byte) ([]byte, error) {
 	if tag, ok := firstPacketTag(body); !ok || tag != pgpPublicKeyTag {
 		return nil, errors.New("signing key does not contain an OpenPGP public key")
 	}
+	if err := checkNoSecretPackets(body); err != nil {
+		return nil, err
+	}
 	return []byte(text + "\n"), nil
+}
+
+// checkNoSecretPackets walks the OpenPGP packets in data and refuses secret
+// key material anywhere, not just in the first packet: a public key
+// followed by the secret one, as in a concatenated export, would otherwise
+// be stored in a world-readable file. Data that does not parse as a
+// sequence of packets is refused as well.
+func checkNoSecretPackets(data []byte) error {
+	for len(data) > 0 {
+		tag, n, err := nextPGPPacket(data)
+		if err != nil {
+			return fmt.Errorf("signing key is not valid OpenPGP data: %w", err)
+		}
+		if tag == pgpSecretKeyTag || tag == pgpSecretSubkeyTag {
+			return errors.New("signing key contains secret key material, which must never be stored in a world-readable file; export the public key only")
+		}
+		data = data[n:]
+	}
+	return nil
+}
+
+// nextPGPPacket returns the tag and the total length, header included, of
+// the OpenPGP packet data starts with (RFC 4880, section 4.2).
+func nextPGPPacket(data []byte) (tag, n int, err error) {
+	truncated := errors.New("truncated packet")
+	if data[0]&0x80 == 0 {
+		return 0, 0, errors.New("invalid packet header")
+	}
+	if data[0]&0x40 == 0 {
+		// Old format: the length type is in the two low bits.
+		tag = int(data[0]>>2) & 0x0f
+		var hdr, length int
+		switch data[0] & 3 {
+		case 0:
+			hdr = 2
+			if len(data) >= hdr {
+				length = int(data[1])
+			}
+		case 1:
+			hdr = 3
+			if len(data) >= hdr {
+				length = int(data[1])<<8 | int(data[2])
+			}
+		case 2:
+			hdr = 5
+			if len(data) >= hdr {
+				length = int(data[1])<<24 | int(data[2])<<16 | int(data[3])<<8 | int(data[4])
+			}
+		default:
+			return tag, len(data), nil // Indeterminate: up to the end.
+		}
+		if len(data) < hdr || length > len(data)-hdr {
+			return 0, 0, truncated
+		}
+		return tag, hdr + length, nil
+	}
+	// New format, possibly with partial body lengths.
+	tag = int(data[0] & 0x3f)
+	pos := 1
+	for {
+		if pos >= len(data) {
+			return 0, 0, truncated
+		}
+		o := int(data[pos])
+		var length int
+		partial := false
+		switch {
+		case o < 192:
+			length, pos = o, pos+1
+		case o < 224:
+			if pos+1 >= len(data) {
+				return 0, 0, truncated
+			}
+			length, pos = (o-192)<<8+int(data[pos+1])+192, pos+2
+		case o == 255:
+			if pos+4 >= len(data) {
+				return 0, 0, truncated
+			}
+			length = int(data[pos+1])<<24 | int(data[pos+2])<<16 | int(data[pos+3])<<8 | int(data[pos+4])
+			pos += 5
+		default:
+			length, pos, partial = 1<<(o&0x1f), pos+1, true
+		}
+		if length < 0 || length > len(data)-pos {
+			return 0, 0, truncated
+		}
+		pos += length
+		if !partial {
+			return tag, pos, nil
+		}
+	}
 }
 
 // dearmorBody decodes the base64 data of an armored block, without
@@ -834,7 +989,9 @@ func fetchSigningKey(ctx context.Context, client *http.Client, rawURL string) ([
 		return nil, err
 	}
 	if u.Scheme == "file" {
-		f, err := os.Open(u.Path)
+		// O_NONBLOCK keeps a FIFO from blocking the apply forever; the
+		// check below then refuses it.
+		f, err := os.OpenFile(u.Path, os.O_RDONLY|syscall.O_NONBLOCK|syscall.O_CLOEXEC, 0)
 		if err != nil {
 			return nil, err
 		}

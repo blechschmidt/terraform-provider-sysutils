@@ -10,7 +10,9 @@ import (
 	"path/filepath"
 	"reflect"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 // testPublicKey is the smallest binary OpenPGP data that passes as a public
@@ -250,7 +252,7 @@ func TestRepoParseRoundTrip(t *testing.T) {
 	}
 
 	apk := repoSpec{name: "testing", description: "Edge: testing", enabled: false, gpgCheck: true, tag: "edge", uris: []string{"https://dl-cdn.alpinelinux.org/alpine/edge/testing"}}
-	pa, ok := parseApkRepo("testing", parseTextFile(apk.render(repoFamilyApk)).lines)
+	pa, ok := parseApkRepo("testing", parseTextFile(apk.render(repoFamilyApk)).lines, nil)
 	if !ok || !reflect.DeepEqual(pa.repoSpec, apk) {
 		t.Errorf("parseApkRepo = %+v, %v, want %+v", pa.repoSpec, ok, apk)
 	}
@@ -317,40 +319,40 @@ func TestApkBlockEditing(t *testing.T) {
 	orig := "https://dl-cdn.alpinelinux.org/alpine/v3.20/main\nhttps://dl-cdn.alpinelinux.org/alpine/v3.20/community"
 	tf := parseTextFile([]byte(orig))
 	block := []string{apkMarkerPrefix + "testing", "@testing https://dl-cdn.alpinelinux.org/alpine/edge/testing"}
-	if !setApkBlock(tf, "testing", block) {
+	if !setApkBlock(tf, "testing", block, nil) {
 		t.Fatal("setApkBlock reported no change")
 	}
 	want := orig + "\n" + strings.Join(block, "\n") + "\n"
 	if got := string(tf.bytes()); got != want {
 		t.Fatalf("after append =\n%s\nwant\n%s", got, want)
 	}
-	if setApkBlock(tf, "testing", block) {
+	if setApkBlock(tf, "testing", block, nil) {
 		t.Error("setApkBlock changed an up-to-date block")
 	}
 	// A second repository, then an update of the first.
 	other := []string{apkMarkerPrefix + "other", "file:///srv/apk"}
-	setApkBlock(tf, "other", other)
+	setApkBlock(tf, "other", other, nil)
 	block2 := []string{apkMarkerPrefix + "testing: Edge", "#@testing https://dl-cdn.alpinelinux.org/alpine/edge/testing"}
-	setApkBlock(tf, "testing", block2)
+	setApkBlock(tf, "testing", block2, nil)
 	want = orig + "\n" + strings.Join(block2, "\n") + "\n" + strings.Join(other, "\n") + "\n"
 	if got := string(tf.bytes()); got != want {
 		t.Fatalf("after update =\n%s\nwant\n%s", got, want)
 	}
 	// A duplicate block is removed by the next update.
 	tf.lines = append(tf.lines, block...)
-	if _, _, n := apkBlock(tf.lines, "testing"); n != 2 {
+	if _, _, n := apkBlock(tf.lines, "testing", nil); n != 2 {
 		t.Fatalf("apkBlock count = %d, want 2", n)
 	}
-	setApkBlock(tf, "testing", block2)
+	setApkBlock(tf, "testing", block2, nil)
 	if got := string(tf.bytes()); got != want {
 		t.Fatalf("after dedup =\n%s\nwant\n%s", got, want)
 	}
 	// A marker at the end of the file, without its line.
 	tf.lines = append(tf.lines, apkMarkerPrefix+"dangling")
-	if s, e, _ := apkBlock(tf.lines, "dangling"); e != s+1 {
+	if s, e, _ := apkBlock(tf.lines, "dangling", nil); e != s+1 {
 		t.Errorf("dangling block = %d..%d", s, e)
 	}
-	if !removeApkBlocks(tf, "dangling", 0) || !removeApkBlocks(tf, "testing", 0) || !removeApkBlocks(tf, "other", 0) {
+	if !removeApkBlocks(tf, "dangling", 0, nil) || !removeApkBlocks(tf, "testing", 0, nil) || !removeApkBlocks(tf, "other", 0, nil) {
 		t.Error("removeApkBlocks found nothing")
 	}
 	if got := string(tf.bytes()); got != orig+"\n" {
@@ -358,11 +360,27 @@ func TestApkBlockEditing(t *testing.T) {
 	}
 	// A marker directly followed by another one owns no line.
 	lines := []string{apkMarkerPrefix + "a", apkMarkerPrefix + "b", "https://b.example/"}
-	if s, e, _ := apkBlock(lines, "a"); s != 0 || e != 1 {
+	if s, e, _ := apkBlock(lines, "a", nil); s != 0 || e != 1 {
 		t.Errorf("apkBlock(a) = %d..%d, want 0..1", s, e)
 	}
+	// With an owner, the line after the marker belongs to the block only if
+	// it names one of the owner's URIs or tags.
+	owner := newApkOwner(&repoSpec{uris: []string{"https://a.example/"}, tag: "a"})
+	for line, owned := range map[string]bool{
+		"https://a.example/":         true,
+		"#@x https://a.example/":     true,
+		"@a https://mirror.example/": true,
+		"https://main.example/":      false,
+		"@b https://main.example/":   false,
+		"":                           false,
+		"https://a.example/extra":    false,
+	} {
+		if _, e, _ := apkBlock([]string{apkMarkerPrefix + "a", line}, "a", owner); (e == 2) != owned {
+			t.Errorf("apkBlock with line %q: end = %d, want owned = %v", line, e, owned)
+		}
+	}
 	// Names are matched exactly.
-	if s, _, _ := apkBlock([]string{apkMarkerPrefix + "testing2", "x"}, "testing"); s != -1 {
+	if s, _, _ := apkBlock([]string{apkMarkerPrefix + "testing2", "x"}, "testing", nil); s != -1 {
 		t.Error("apkBlock matched a longer name")
 	}
 }
@@ -400,6 +418,7 @@ func TestNormalizeSigningKey(t *testing.T) {
 	}
 
 	secret := append([]byte{0x95}, testPublicKey[1:]...) // Tag 5: secret key.
+	publicThenSecret := append(append([]byte{}, testPublicKey...), secret...)
 	for name, bad := range map[string][]byte{
 		"empty":          nil,
 		"text":           []byte("not a key"),
@@ -408,6 +427,13 @@ func TestNormalizeSigningKey(t *testing.T) {
 		"armored secret": []byte(pgpArmorBegin + "\n\n" + base64.StdEncoding.EncodeToString(secret) + "\n" + pgpArmorEnd),
 		"private block":  []byte("-----BEGIN PGP PRIVATE KEY BLOCK-----\n\nxx\n-----END PGP PRIVATE KEY BLOCK-----"),
 		"too large":      append(append([]byte{}, testPublicKey...), make([]byte, maxSigningKeySize)...),
+		// Secret key material after the public key, as in a concatenated
+		// export, would end up in a world-readable file.
+		"public then secret":         publicThenSecret,
+		"armored public then secret": armorPublicKey(publicThenSecret),
+		"public then secret subkey":  append(append([]byte{}, testPublicKey...), 0xc7, 0x01, 0x00),
+		"public then private block":  []byte(strings.TrimSpace(armored) + "\n" + strings.Replace(strings.Replace(strings.TrimSpace(string(armorPublicKey(secret))), "PUBLIC", "PRIVATE", 1), "PUBLIC", "PRIVATE", 1) + "\n" + strings.TrimSpace(armored)),
+		"truncated packet":           testPublicKey[:len(testPublicKey)-1],
 	} {
 		if _, err := normalizeSigningKey(bad); err == nil {
 			t.Errorf("normalizeSigningKey(%s) = nil error", name)
@@ -458,6 +484,28 @@ func TestFetchSigningKey(t *testing.T) {
 	}
 	if _, err := fetchSigningKey(ctx, nil, "file://"+dir); err == nil {
 		t.Error("fetch of a directory: no error")
+	}
+	// A FIFO is refused rather than blocking the apply forever.
+	fifo := filepath.Join(dir, "fifo")
+	if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, err := fetchSigningKey(ctx, nil, "file://"+fifo)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Error("fetch of a FIFO: no error")
+		}
+	case <-time.After(5 * time.Second):
+		t.Error("fetch of a FIFO blocks")
+		// Unblock the goroutine.
+		if w, err := os.OpenFile(fifo, os.O_WRONLY, 0); err == nil {
+			_ = w.Close()
+		}
 	}
 }
 

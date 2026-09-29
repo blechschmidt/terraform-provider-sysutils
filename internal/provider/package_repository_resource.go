@@ -357,9 +357,13 @@ func repoSpecFromModel(ctx context.Context, m *packageRepositoryModel) (spec rep
 	return spec, known && !diags.HasError(), diags
 }
 
-// hasSigningKey reports whether m configures a key.
-func (m *packageRepositoryModel) hasSigningKey() bool {
-	return !m.SigningKey.IsNull() || !m.SigningKeyURL.IsNull()
+// keyForValidate returns what repoSpec.validate checks as the key of m:
+// signing_key_url, or a placeholder for an inline key, which apk refuses.
+func keyForValidate(m *packageRepositoryModel) string {
+	if !m.SigningKey.IsNull() {
+		return "inline"
+	}
+	return m.SigningKeyURL.ValueString()
 }
 
 // storesKey reports whether the key m configures is stored in a file for
@@ -416,10 +420,7 @@ func (r *packageRepositoryResource) ModifyPlan(ctx context.Context, req resource
 			return
 		}
 		if known {
-			if plan.hasSigningKey() && family == repoFamilyApk {
-				// Reported by validate below.
-				spec.signingKeyURL = "set"
-			}
+			spec.signingKeyURL = keyForValidate(&plan)
 			if err := spec.validate(family); err != nil {
 				resp.Diagnostics.AddError("Invalid repository", fmt.Sprintf("Invalid %s repository: %s.", familyDisplay(family), err))
 				return
@@ -600,9 +601,7 @@ func (r *packageRepositoryResource) apply(ctx context.Context, plan, prior *pack
 		diags.AddError("Unknown values", "All attributes of the repository must be known at apply time.")
 		return res
 	}
-	if plan.hasSigningKey() && family == repoFamilyApk {
-		spec.signingKeyURL = "set"
-	}
+	spec.signingKeyURL = keyForValidate(plan)
 	if err := spec.validate(family); err != nil {
 		diags.AddError("Invalid repository", fmt.Sprintf("Invalid %s repository: %s.", familyDisplay(family), err))
 		return res
@@ -622,6 +621,8 @@ func (r *packageRepositoryResource) apply(ctx context.Context, plan, prior *pack
 	// that is not there yet.
 	plannedSHA := plan.SigningKeySHA256
 	keyPath := ""
+	// createdKey is the host path of the key file if this apply created it.
+	createdKey := ""
 	plan.SigningKeyPath, plan.SigningKeySHA256 = types.StringNull(), types.StringNull()
 	if plan.storesKey(family) {
 		keyPath = signingKeyPath(family, name)
@@ -663,6 +664,9 @@ func (r *packageRepositoryResource) apply(ctx context.Context, plan, prior *pack
 				return res
 			}
 			res.written = res.written || changed
+			if !ownKey {
+				createdKey = keyHost
+			}
 			plan.SigningKeySHA256 = types.StringValue(sha256Hex(key))
 		}
 		plan.SigningKeyPath = types.StringValue(keyPath)
@@ -678,12 +682,26 @@ func (r *packageRepositoryResource) apply(ctx context.Context, plan, prior *pack
 	content := spec.render(family)
 	var changed bool
 	if family == repoFamilyApk {
-		changed, err = writeApkBlock(host, name, content, create)
+		owner := newApkOwner(&spec)
+		if prior != nil {
+			owner = newApkOwner(&spec, apkSpecOf(ctx, prior))
+		}
+		changed, err = writeApkBlock(host, name, content, create, owner)
 	} else {
 		changed, err = writeRepoFile(host, content, uid, gid, create)
 	}
 	if err != nil {
 		diags.Append(repoWriteError(p, "name", err)...)
+		if createdKey != "" {
+			// Without the repository, the new key is removed again, and
+			// nothing is recorded: a create that failed because the file
+			// exists must not taint a resource whose destroy would remove
+			// that file.
+			if err := removeCronFile(createdKey); err != nil {
+				diags.AddError("Removing signing key", fmt.Sprintf("Removing %s after the repository could not be written: %s.", keyPath, err))
+			}
+			res.written = false
+		}
 		return res
 	}
 	res.written = res.written || changed
@@ -822,10 +840,16 @@ func (r *packageRepositoryResource) refresh(ctx context.Context, m *packageRepos
 	case repoFamilyApk:
 		if found {
 			lines := parseTextFile(data).lines
-			start, end, count := apkBlock(lines, name)
+			// An imported repository takes whatever line follows its
+			// marker.
+			var owner *apkOwner
+			if !imported {
+				owner = newApkOwner(apkSpecOf(ctx, m))
+			}
+			start, end, count := apkBlock(lines, name, owner)
 			found = start >= 0
 			if found {
-				parsed, _ = parseApkRepo(name, lines)
+				parsed, _ = parseApkRepo(name, lines, owner)
 				content = types.StringValue(strings.Join(lines[start:end], "\n") + "\n")
 				if count > 1 {
 					diags.AddWarning("Repository listed several times",
@@ -931,7 +955,7 @@ func (r *packageRepositoryResource) Delete(ctx context.Context, req resource.Del
 		return
 	}
 	if family == repoFamilyApk {
-		err = removeApkBlock(host, name)
+		err = removeApkBlock(host, name, newApkOwner(apkSpecOf(ctx, &state)))
 	} else {
 		err = removeCronFile(host)
 	}
@@ -1089,24 +1113,31 @@ func editApkRepositories(p string, edit func(t *textFile) (bool, error)) (bool, 
 // writeApkBlock makes the managed lines of repository name in the apk
 // repositories file p equal block. With create set, an existing entry is
 // an error.
-func writeApkBlock(p, name string, block []byte, create bool) (bool, error) {
+func writeApkBlock(p, name string, block []byte, create bool, owner *apkOwner) (bool, error) {
 	lines := parseTextFile(block).lines
 	return editApkRepositories(p, func(t *textFile) (bool, error) {
-		if start, _, _ := apkBlock(t.lines, name); create && start >= 0 {
+		if start, _, _ := apkBlock(t.lines, name, owner); create && start >= 0 {
 			return false, fmt.Errorf("%s: %w", p, errRepoExists)
 		}
-		return setApkBlock(t, name, lines), nil
+		return setApkBlock(t, name, lines, owner), nil
 	})
 }
 
-// removeApkBlock removes the managed lines of repository name from p. The
-// file itself is kept, even if empty.
-func removeApkBlock(p, name string) error {
+// removeApkBlock removes the managed lines of repository name, as far as
+// owner owns them, from p. The file itself is kept, even if empty.
+func removeApkBlock(p, name string, owner *apkOwner) error {
 	if _, err := os.Lstat(p); errors.Is(err, fs.ErrNotExist) {
 		return nil
 	}
 	_, err := editApkRepositories(p, func(t *textFile) (bool, error) {
-		return removeApkBlocks(t, name, 0), nil
+		return removeApkBlocks(t, name, 0, owner), nil
 	})
 	return err
+}
+
+// apkSpecOf returns the URIs and tag of the apk repository m, which is all
+// an apkOwner needs. Unknown or invalid values are left out.
+func apkSpecOf(ctx context.Context, m *packageRepositoryModel) *repoSpec {
+	uris, _, _ := listValues(ctx, m.URIs)
+	return &repoSpec{uris: uris, tag: m.Tag.ValueString()}
 }
