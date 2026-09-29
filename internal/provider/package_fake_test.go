@@ -31,6 +31,8 @@ type fakePackageManager struct {
 	// installing them installs.
 	provides map[string]string
 	calls    []string
+	// updateErr, if set, is returned by UpdateCache.
+	updateErr error
 }
 
 func newFakePackageManager(kind string) *fakePackageManager {
@@ -146,6 +148,9 @@ func (f *fakePackageManager) UpdateCache(_ context.Context) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.record("update")
+	if f.updateErr != nil {
+		return f.updateErr
+	}
 	for name, versions := range f.stale {
 		f.available[name] = append(f.available[name], versions...)
 	}

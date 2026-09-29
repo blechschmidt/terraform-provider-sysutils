@@ -758,3 +758,43 @@ resource "sysutils_ini_value" "created" {
 		CheckDestroy: checkFileText(p, "; settings\n[server]\n\n[log]\n"),
 	})
 }
+
+func TestAccUpgradeLocal_packageRepository(t *testing.T) {
+	// Below a root_dir, so that the host's repositories are left alone.
+	root := t.TempDir()
+	for _, d := range []string{"etc/apt", "etc/apk"} {
+		if err := os.MkdirAll(filepath.Join(root, d), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	resource.Test(t, resource.TestCase{
+		Steps: localUpgradeSteps(t, "sysutils_package_repository", fmt.Sprintf(`
+provider "sysutils" {
+  root_dir = %q
+}
+
+resource "sysutils_package_repository" "apt" {
+  name          = "upgrade"
+  manager       = "apt"
+  description   = "Upgrade test"
+  uris          = ["https://example.com/debian"]
+  suites        = ["stable"]
+  components    = ["main"]
+  architectures = ["amd64"]
+  signing_key   = %q
+}
+
+resource "sysutils_package_repository" "apk" {
+  name    = "upgrade"
+  manager = "apk"
+  uris    = ["https://example.com/alpine"]
+  tag     = "upgrade"
+  enabled = false
+}
+`, root, testArmoredKey)),
+		CheckDestroy: checkRepoGone(
+			filepath.Join(root, "etc/apt/sources.list.d/upgrade.sources"),
+			filepath.Join(root, "etc/apt/keyrings/upgrade.asc"),
+		),
+	})
+}

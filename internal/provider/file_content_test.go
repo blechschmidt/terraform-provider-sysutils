@@ -3,7 +3,6 @@ package provider
 import (
 	"bytes"
 	"crypto/md5" //nolint:gosec // Checksum under test.
-	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
@@ -26,8 +25,7 @@ import (
 // content_base64 or source.
 var binaryPayload = []byte{0x00, 0xff, 0xfe, 'b', 'i', 'n', 0x80, '\n'}
 
-func sha256Hex(b []byte) string { s := sha256.Sum256(b); return hex.EncodeToString(s[:]) }
-func md5Hex(b []byte) string    { s := md5.Sum(b); return hex.EncodeToString(s[:]) } //nolint:gosec
+func md5Hex(b []byte) string { s := md5.Sum(b); return hex.EncodeToString(s[:]) } //nolint:gosec
 
 func checkChecksums(name string, want []byte) resource.TestCheckFunc {
 	return resource.ComposeAggregateTestCheckFunc(

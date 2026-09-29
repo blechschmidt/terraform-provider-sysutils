@@ -145,7 +145,7 @@ The package is imported with `state = "present"`, `manager = "auto"`, `remove_on
 
 - The resource requires root.
 - It cannot be used with the provider's `root_dir` argument: package managers act on the running host, so the resource refuses to plan when `root_dir` is set. Use a separate provider configuration without `root_dir` for it.
-- Only packages from the configured repositories can be installed, not local `.deb`, `.rpm` or `.apk` files. Repositories, keys, holds and version locks are not managed.
+- Only packages from the configured repositories can be installed, not local `.deb`, `.rpm` or `.apk` files. Holds and version locks are not managed; add repositories and their keys with [`sysutils_package_repository`](./package_repository.md).
 - With several architectures of a package installed (Debian multiarch, RPM multilib), the version of the first one the database lists is reported.
 - The provider never answers questions a package asks during installation, such as debconf questions; the defaults are used. Preseed answers with `debconf-set-selections` in a [`sysutils_exec`](./exec.md) resource beforehand if you need others.
 - Services installed by a package may be started by its installation scripts, as when you run the package manager yourself. Manage them with [`sysutils_systemd_unit`](./systemd_unit.md) or `systemctl`.
