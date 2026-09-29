@@ -27,23 +27,7 @@ It is intended for small bootstrapping tasks where installing and configuring so
 
 ## Example Usage
 
-```terraform
-terraform {
-  required_providers {
-    sysutils = {
-      source = "blechschmidt/sysutils"
-    }
-  }
-}
-
-provider "sysutils" {}
-
-resource "sysutils_file" "motd" {
-  path    = "/etc/motd"
-  content = "Welcome.\n"
-  mode    = "0644"
-}
-```
+{{ tffile "examples/provider/provider.tf" }}
 
 ## Requirements
 

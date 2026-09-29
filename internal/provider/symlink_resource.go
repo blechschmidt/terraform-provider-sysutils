@@ -46,36 +46,44 @@ func (r *symlinkResource) Metadata(_ context.Context, req resource.MetadataReque
 
 func (r *symlinkResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		Description: "Manages a symbolic link on the local filesystem, including the ownership of the link itself.",
+		MarkdownDescription: "Creates a symbolic link at `path` that points to `target`, and optionally sets the `owner` / `group` of the link itself (which requires privileges). " +
+			"On destroy, only the link is removed; whatever it points to is never touched.",
 		Attributes: map[string]schema.Attribute{
 			"path": schema.StringAttribute{
-				Required:      true,
-				Description:   "Absolute path of the symbolic link. Missing parent directories are created.",
+				Required: true,
+				MarkdownDescription: "Absolute path of the symbolic link. " +
+					"Must be in canonical form (no `.`/`..` segments, duplicate or trailing slashes) and must not be `/`. " +
+					"Missing parent directories are created with mode `0755`. Changing this forces a new resource.",
 				PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace()},
 				Validators:    []validator.String{absolutePath()},
 			},
 			"target": schema.StringAttribute{
 				Required: true,
-				Description: "Path the link points to, stored verbatim (relative targets are resolved against the link's directory). " +
-					"The target does not need to exist. Changing it atomically replaces the link in place.",
+				MarkdownDescription: "Path the link points to, stored verbatim. " +
+					"May be absolute or relative; relative targets are resolved by the kernel against the link's directory. " +
+					"The target does not need to exist. Must not be empty or contain NUL bytes. " +
+					"Changing this replaces the link atomically in place.",
 				Validators: []validator.String{symlinkTarget()},
 			},
 			"owner": schema.StringAttribute{
-				Optional:      true,
-				Computed:      true,
-				Description:   "Username (or numeric UID) owning the link itself (applied with lchown; the target is not affected). Requires privileges to change. Defaults to the owner assigned on creation.",
+				Optional: true,
+				Computed: true,
+				MarkdownDescription: "Username or numeric UID that should own the link itself. " +
+					"Applied with `lchown`, so the target's ownership is not affected. Requires privileges to change. " +
+					"If unset, the owner assigned at creation is kept.",
 				PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
 			},
 			"group": schema.StringAttribute{
-				Optional:      true,
-				Computed:      true,
-				Description:   "Group name (or numeric GID) of the link itself (applied with lchown; the target is not affected). Requires privileges to change. Defaults to the group assigned on creation.",
+				Optional: true,
+				Computed: true,
+				MarkdownDescription: "Group name or numeric GID of the link itself. Applied with `lchown`, so the target's ownership is not affected. " +
+					"Requires privileges to change. If unset, the group assigned at creation is kept.",
 				PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
 			},
 			"id": schema.StringAttribute{
-				Computed:      true,
-				Description:   "Resource identifier (the link path).",
-				PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
+				Computed:            true,
+				MarkdownDescription: "Resource identifier (equal to `path`).",
+				PlanModifiers:       []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
 			},
 		},
 	}

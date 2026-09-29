@@ -26,4 +26,24 @@ coverage:
 lint:
 	golangci-lint run ./...
 
-.PHONY: build install test testacc test-docker coverage lint
+# Regenerate docs/ from the provider schema, templates/ and examples/.
+# tfplugindocs is pinned as a Go tool in go.mod. It needs the terraform CLI:
+# the one on PATH is used, otherwise the latest release is downloaded.
+docs:
+	terraform fmt -recursive examples/
+	go tool tfplugindocs generate --provider-name sysutils
+
+# Fail if docs/ is out of date with the schema, templates or examples, or if
+# the generated docs or example formatting are invalid. Run by CI.
+docs-check:
+	terraform fmt -recursive -check -diff examples/
+	go tool tfplugindocs generate --provider-name sysutils
+	go tool tfplugindocs validate --provider-name sysutils
+	@if [ -n "$$(git status --porcelain -- docs)" ]; then \
+		echo 'docs/ is out of date. Run "make docs" and commit the result:'; \
+		git status --porcelain -- docs; \
+		git --no-pager diff -- docs; \
+		exit 1; \
+	fi
+
+.PHONY: build install test testacc test-docker coverage lint docs docs-check

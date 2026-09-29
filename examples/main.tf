@@ -14,12 +14,32 @@ resource "sysutils_file" "hello" {
   mode    = "0644"
 }
 
+# The service's primary group. Its gid is assigned from the system range.
+resource "sysutils_group" "app" {
+  name   = "appsvc"
+  system = true
+}
+
+# A group the service joins through its user's `groups`. Its membership is
+# managed on the user side, so the group leaves `members` unset.
+resource "sysutils_group" "app_readers" {
+  name = "appreaders"
+}
+
 resource "sysutils_user" "app" {
   name        = "appsvc"
+  gid         = sysutils_group.app.gid # creates the group first
   shell       = "/usr/sbin/nologin"
   system      = true
   create_home = false
-  groups      = ["adm"]
+  groups      = ["adm", sysutils_group.app_readers.name]
+}
+
+# A group whose member list Terraform owns (gpasswd -M). Don't also list it in
+# a sysutils_user's `groups`: the two resources would fight over membership.
+resource "sysutils_group" "app_admins" {
+  name    = "appadmins"
+  members = ["root"]
 }
 
 # A private directory owned by the service user, with its config file inside.
@@ -57,6 +77,13 @@ data "sysutils_directory" "tmp" {
   path = "/tmp"
 }
 
+# Read a file without managing it. /etc/os-release is usually a symlink to
+# /usr/lib/os-release, so following it has to be requested explicitly.
+data "sysutils_file" "os_release" {
+  path            = "/etc/os-release"
+  follow_symlinks = true
+}
+
 # Run a command using the provider process's environment plus an override.
 resource "sysutils_exec" "inherited" {
   command = ["/bin/sh", "-c", "echo PATH=$PATH EXTRA=$EXTRA"]
@@ -85,3 +112,4 @@ output "isolated_exit" { value = sysutils_exec.isolated.exit_code }
 
 output "tmp_mode" { value = data.sysutils_directory.tmp.mode }
 output "tmp_exists" { value = data.sysutils_directory.tmp.exists }
+output "os_release_sha256" { value = data.sysutils_file.os_release.content_sha256 }

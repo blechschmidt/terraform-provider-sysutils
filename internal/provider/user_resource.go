@@ -48,55 +48,58 @@ func (r *userResource) Metadata(_ context.Context, req resource.MetadataRequest,
 
 func (r *userResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		Description: "Manages a local Linux user via useradd/usermod/userdel. Requires root privileges.",
+		MarkdownDescription: "Manages a local user account by shelling out to `useradd` (create), `usermod` (update), and `userdel` (delete). " +
+			"Requires root privileges. " +
+			"Password management is intentionally not supported — use a separate mechanism if you need it.",
 		Attributes: map[string]schema.Attribute{
 			"name": schema.StringAttribute{
-				Required:      true,
-				Description:   "Username.",
-				PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace()},
+				Required:            true,
+				MarkdownDescription: "Username. Changing this forces a new resource.",
+				PlanModifiers:       []planmodifier.String{stringplanmodifier.RequiresReplace()},
 			},
 			"uid": schema.Int64Attribute{
-				Optional:    true,
-				Computed:    true,
-				Description: "Numeric user ID. Assigned by the system if unset.",
+				Optional:            true,
+				Computed:            true,
+				MarkdownDescription: "Numeric user ID. Assigned by the system if unset.",
 			},
 			"gid": schema.Int64Attribute{
-				Optional:    true,
-				Computed:    true,
-				Description: "Primary numeric group ID.",
+				Optional:            true,
+				Computed:            true,
+				MarkdownDescription: "Primary numeric group ID. Reference `sysutils_group.<name>.gid` to use a managed group.",
 			},
 			"home": schema.StringAttribute{
-				Optional:    true,
-				Computed:    true,
-				Description: "Home directory path.",
+				Optional:            true,
+				Computed:            true,
+				MarkdownDescription: "Home directory path.",
 			},
 			"shell": schema.StringAttribute{
-				Optional:    true,
-				Computed:    true,
-				Description: "Login shell.",
+				Optional:            true,
+				Computed:            true,
+				MarkdownDescription: "Login shell (for example `/bin/bash` or `/usr/sbin/nologin`).",
 			},
 			"comment": schema.StringAttribute{
-				Optional:    true,
-				Description: "GECOS comment field.",
+				Optional:            true,
+				MarkdownDescription: "Value for the GECOS comment field in `/etc/passwd`.",
 			},
 			"system": schema.BoolAttribute{
-				Optional:      true,
-				Description:   "Create as a system account.",
-				PlanModifiers: []planmodifier.Bool{},
+				Optional:            true,
+				MarkdownDescription: "Create as a system account (`useradd -r`). Only honored at create time.",
+				PlanModifiers:       []planmodifier.Bool{},
 			},
 			"create_home": schema.BoolAttribute{
-				Optional:    true,
-				Description: "Create the home directory on create. Defaults to false.",
+				Optional:            true,
+				MarkdownDescription: "If `true`, pass `-m` to `useradd` to create the home directory. Defaults to `false` (i.e. `-M`).",
 			},
 			"groups": schema.SetAttribute{
 				Optional:    true,
 				ElementType: types.StringType,
-				Description: "Supplementary group names.",
+				MarkdownDescription: "Supplementary group names. Replaces the current supplementary-group set on update. " +
+					"If unset, membership is neither compared nor reconciled.",
 			},
 			"id": schema.StringAttribute{
-				Computed:      true,
-				Description:   "Resource identifier (the username).",
-				PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
+				Computed:            true,
+				MarkdownDescription: "Resource identifier (equal to `name`).",
+				PlanModifiers:       []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
 			},
 		},
 	}

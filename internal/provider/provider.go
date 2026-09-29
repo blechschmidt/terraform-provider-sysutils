@@ -26,7 +26,8 @@ func (p *sysutilsProvider) Metadata(_ context.Context, _ provider.MetadataReques
 
 func (p *sysutilsProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *provider.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		Description: "Basic Linux system utility resources (files, users, command execution).",
+		MarkdownDescription: "The `sysutils` provider exposes a small set of primitives for host-level administration from Terraform: files, directories, symlinks, local users and groups, and command execution. " +
+			"The provider takes no configuration arguments.",
 	}
 }
 

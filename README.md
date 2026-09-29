@@ -6,15 +6,17 @@ A Terraform provider for basic Linux system-administration primitives: managing 
 
 ### Resources
 
-- `sysutils_file` — write a file with content, mode, and optional owner/group. Supports import and detects drift.
-- `sysutils_directory` — manage a directory with mode and optional owner/group; optionally delete it recursively on destroy. Supports import and detects drift.
+- `sysutils_file` — write a file from text (`content`), binary data (`content_base64`) or a local `source` file, with mode and optional owner/group. Exposes SHA-256/MD5 checksums, supports import and detects drift.
+- `sysutils_directory` — manage a directory with mode and optional owner/group; optionally apply ownership and modes to the whole tree (like `chown -R` / `chmod -R`) and delete it recursively on destroy. Supports import and detects drift.
 - `sysutils_symlink` — manage a symbolic link, switching its target atomically, with optional owner/group of the link itself. Supports import and detects drift.
 - `sysutils_user` — create, update, and delete local users via `useradd`/`usermod`/`userdel`.
+- `sysutils_group` — create, update, and delete local groups and their member lists via `groupadd`/`groupmod`/`gpasswd`/`groupdel`.
 - `sysutils_exec` — run a command (passed as a string array) with either the provider's environment or a custom one, capturing exit code, stdout, and stderr.
 
 ### Data sources
 
 - `sysutils_directory` — read a directory's existence, mode, ownership and entry names without managing it.
+- `sysutils_file` — read an existing file's contents (as text and base64), checksums, size, mode, ownership and modification time without managing it.
 
 ## Installation
 
@@ -89,8 +91,10 @@ output "migration_exit"   { value = sysutils_exec.migrate.exit_code }
 - [`sysutils_directory`](./docs/resources/directory.md)
 - [`sysutils_symlink`](./docs/resources/symlink.md)
 - [`sysutils_user`](./docs/resources/user.md)
+- [`sysutils_group`](./docs/resources/group.md)
 - [`sysutils_exec`](./docs/resources/exec.md)
 - [`sysutils_directory` data source](./docs/data-sources/directory.md)
+- [`sysutils_file` data source](./docs/data-sources/file.md)
 - [Examples](./examples)
 
 ## Requirements
@@ -109,9 +113,18 @@ make testacc      # acceptance tests against the host (requires root)
 make test-docker  # acceptance tests inside a throwaway container (safe)
 make lint         # golangci-lint
 make coverage     # generate coverage.html
+make docs         # regenerate docs/ with tfplugindocs
 ```
 
 The acceptance tests create real users, write real files, and execute real commands. They are gated by `TF_ACC=1` **and** a root-EUID check, and the default path for running them is `make test-docker`, which builds `Dockerfile.test` and runs everything inside a disposable container so the host is never touched.
+
+The files under `docs/` are generated; do not edit them by hand. `make docs` builds them with [terraform-plugin-docs](https://github.com/hashicorp/terraform-plugin-docs) from three sources:
+
+- the schema's `MarkdownDescription` fields for each attribute (in `internal/provider/*.go`),
+- the page layout and prose (drift detection, caveats, security notes) in `templates/`,
+- the example configurations and import commands in `examples/`.
+
+Edit those and rerun `make docs`. CI runs `make docs-check`, which fails if the committed `docs/` differs from what the sources generate.
 
 ## Releasing
 

@@ -8,3 +8,4 @@ terraform-provider-sysutils
 coverage.out
 coverage.html
 dist/
+.cloop

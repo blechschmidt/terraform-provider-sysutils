@@ -3,3 +3,4 @@ terraform-provider-sysutils
 *.tfstate.backup
 .terraform/
 .terraform.lock.hcl
+.cloop/

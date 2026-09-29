@@ -48,65 +48,71 @@ func (r *execResource) Schema(_ context.Context, _ resource.SchemaRequest, resp 
 	requiresReplaceList := []planmodifier.List{listplanmodifier.RequiresReplace()}
 	requiresReplaceMap := []planmodifier.Map{mapplanmodifier.RequiresReplace()}
 	resp.Schema = schema.Schema{
-		Description: "Executes a command. Re-runs when any input attribute (including `triggers`) changes.",
+		MarkdownDescription: "Runs a command when the resource is created and again whenever any input attribute changes. " +
+			"The exit code, standard output, and standard error are recorded as computed attributes you can reference from other resources or outputs.",
 		Attributes: map[string]schema.Attribute{
 			"command": schema.ListAttribute{
-				Required:      true,
-				ElementType:   types.StringType,
-				Description:   "Command and arguments as a list (argv[0] is the executable).",
-				PlanModifiers: requiresReplaceList,
+				Required:            true,
+				ElementType:         types.StringType,
+				MarkdownDescription: "Command and arguments as a list. Element `0` is the executable. Example: `[\"/bin/sh\", \"-c\", \"echo hi\"]`.",
+				PlanModifiers:       requiresReplaceList,
 			},
 			"environment": schema.MapAttribute{
-				Optional:      true,
-				ElementType:   types.StringType,
-				Description:   "Environment variables to set. If `inherit_parent_environment` is false, these are the only variables in the child environment.",
+				Optional:    true,
+				ElementType: types.StringType,
+				MarkdownDescription: "Environment variables to pass to the child. " +
+					"If `inherit_parent_environment` is `false`, these are the only variables in the child's environment.",
 				PlanModifiers: requiresReplaceMap,
 			},
 			"inherit_parent_environment": schema.BoolAttribute{
-				Optional:      true,
-				Computed:      true,
-				Default:       booldefault.StaticBool(true),
-				Description:   "If true (default), the child starts from the provider process's environment and `environment` overrides specific keys. If false, only `environment` is used.",
+				Optional: true,
+				Computed: true,
+				Default:  booldefault.StaticBool(true),
+				MarkdownDescription: "If `true` (default), the child process starts from the Terraform provider's environment and the keys in `environment` override specific values. " +
+					"If `false`, only the `environment` map is used.",
 				PlanModifiers: []planmodifier.Bool{boolplanmodifier.RequiresReplace()},
 			},
 			"working_directory": schema.StringAttribute{
-				Optional:      true,
-				Description:   "Working directory for the child process.",
-				PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace()},
+				Optional:            true,
+				MarkdownDescription: "Working directory for the child process.",
+				PlanModifiers:       []planmodifier.String{stringplanmodifier.RequiresReplace()},
 			},
 			"stdin": schema.StringAttribute{
-				Optional:      true,
-				Description:   "Data to pipe into the command's standard input.",
-				PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace()},
+				Optional:            true,
+				MarkdownDescription: "Data to pipe into the command's standard input.",
+				PlanModifiers:       []planmodifier.String{stringplanmodifier.RequiresReplace()},
 			},
 			"triggers": schema.MapAttribute{
-				Optional:      true,
-				ElementType:   types.StringType,
-				Description:   "Arbitrary map whose changes force re-execution.",
+				Optional:    true,
+				ElementType: types.StringType,
+				MarkdownDescription: "Arbitrary map whose changes force re-execution. " +
+					"The values are not passed to the command; they exist solely to invalidate the resource.",
 				PlanModifiers: requiresReplaceMap,
 			},
 			"fail_on_nonzero": schema.BoolAttribute{
-				Optional:      true,
-				Computed:      true,
-				Default:       booldefault.StaticBool(true),
-				Description:   "If true (default), a nonzero exit code causes the apply to fail. If false, the exit code is recorded and apply continues.",
+				Optional: true,
+				Computed: true,
+				Default:  booldefault.StaticBool(true),
+				MarkdownDescription: "If `true` (default), a non-zero exit code causes the apply to fail with the captured stderr in the diagnostic. " +
+					"If `false`, the exit code is recorded and the apply continues.",
 				PlanModifiers: []planmodifier.Bool{boolplanmodifier.RequiresReplace()},
 			},
 			"exit_code": schema.Int64Attribute{
-				Computed:    true,
-				Description: "Exit code returned by the command.",
+				Computed:            true,
+				MarkdownDescription: "Exit code returned by the command.",
 			},
 			"stdout": schema.StringAttribute{
-				Computed:    true,
-				Description: "Captured standard output.",
+				Computed:            true,
+				MarkdownDescription: "Captured standard output.",
 			},
 			"stderr": schema.StringAttribute{
-				Computed:    true,
-				Description: "Captured standard error.",
+				Computed:            true,
+				MarkdownDescription: "Captured standard error.",
 			},
 			"id": schema.StringAttribute{
-				Computed:      true,
-				PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
+				MarkdownDescription: "Opaque resource identifier.",
+				Computed:            true,
+				PlanModifiers:       []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
 			},
 		},
 	}

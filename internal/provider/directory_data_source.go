@@ -40,48 +40,51 @@ func (d *directoryDataSource) Metadata(_ context.Context, req datasource.Metadat
 
 func (d *directoryDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, resp *datasource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		Description: "Reads metadata and the entry names of a directory on the local filesystem. " +
-			"A missing directory is not an error: exists is false and all other attributes are null. " +
-			"Symlinks are followed; a path that exists but is not a directory is an error.",
+		MarkdownDescription: "Reads a directory's mode, ownership and immediate entries without managing it. " +
+			"Use it to make decisions based on the state of the host — for example to only create something if a directory exists, to copy the ownership of an existing directory, or to generate one resource per file found in a directory.",
 		Attributes: map[string]schema.Attribute{
 			"path": schema.StringAttribute{
-				Required:    true,
-				Description: "Absolute path of the directory to read.",
-				Validators:  []validator.String{absolutePathOrRoot()},
+				Required: true,
+				MarkdownDescription: "Absolute path of the directory to read. " +
+					"Must be in canonical form (no `.`/`..` segments, duplicate or trailing slashes). " +
+					"Unlike the resources, `/` is allowed. Symlinks are followed.",
+				Validators: []validator.String{absolutePathOrRoot()},
 			},
 			"exists": schema.BoolAttribute{
-				Computed:    true,
-				Description: "Whether the directory exists.",
+				Computed:            true,
+				MarkdownDescription: "Whether the directory exists.",
 			},
 			"mode": schema.StringAttribute{
-				Computed:    true,
-				Description: "Four-digit octal mode of the directory, including special bits (e.g. \"0755\", \"1777\").",
+				Computed: true,
+				MarkdownDescription: "Four-digit octal mode of the directory, including setuid, setgid and sticky bits (e.g. `\"0755\"`, `\"1777\"`). " +
+					"Null if the directory does not exist.",
 			},
 			"owner": schema.StringAttribute{
-				Computed:    true,
-				Description: "Username of the owner, or the numeric UID if it has no passwd entry.",
+				Computed: true,
+				MarkdownDescription: "Username of the owner, or the numeric UID as a string if it has no passwd entry. " +
+					"Null if the directory does not exist.",
 			},
 			"group": schema.StringAttribute{
-				Computed:    true,
-				Description: "Group name, or the numeric GID if it has no group entry.",
+				Computed:            true,
+				MarkdownDescription: "Group name, or the numeric GID as a string if it has no group entry. Null if the directory does not exist.",
 			},
 			"uid": schema.Int64Attribute{
-				Computed:    true,
-				Description: "Numeric UID of the owner.",
+				Computed:            true,
+				MarkdownDescription: "Numeric UID of the owner. Null if the directory does not exist.",
 			},
 			"gid": schema.Int64Attribute{
-				Computed:    true,
-				Description: "Numeric GID of the group.",
+				Computed:            true,
+				MarkdownDescription: "Numeric GID of the group. Null if the directory does not exist.",
 			},
 			"entries": schema.ListAttribute{
 				Computed:    true,
 				ElementType: types.StringType,
-				Description: "Names of the directory's immediate entries (files, subdirectories, symlinks, ...), " +
-					"sorted lexically and excluding \".\" and \"..\". Not recursive.",
+				MarkdownDescription: "Names (not full paths) of the directory's immediate entries — files, subdirectories, symlinks and so on — sorted lexically, excluding `.` and `..`. " +
+					"The listing is not recursive and includes hidden entries. Null if the directory does not exist.",
 			},
 			"id": schema.StringAttribute{
-				Computed:    true,
-				Description: "Data source identifier (the directory path).",
+				Computed:            true,
+				MarkdownDescription: "Data source identifier (equal to `path`).",
 			},
 		},
 	}
