@@ -124,8 +124,9 @@ func (r *fileLineResource) Schema(_ context.Context, _ resource.SchemaRequest, r
 					"If `false`, a missing file is an error. Destroy never deletes the file. Defaults to `false`.",
 			},
 			"id": schema.StringAttribute{
-				Computed:            true,
-				MarkdownDescription: "Resource identifier: `path`, a colon, and then `marker` for blocks or `line` for lines.",
+				Computed: true,
+				MarkdownDescription: "Resource identifier: `path`, a colon, and then `marker` for blocks or the word `line` for lines. " +
+					"The content of `line` is left out, so that a secret in it, even one from a sensitive variable, is not shown in plans as part of the id.",
 			},
 		},
 	}
@@ -272,6 +273,7 @@ func (r *fileLineResource) ImportState(ctx context.Context, req resource.ImportS
 		return
 	}
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("path"), target)...)
+	m := fileLineModel{Path: types.StringValue(target), Line: types.StringNull(), Marker: types.StringValue(rest)}
 	if strings.Contains(rest, markPlaceholder) {
 		if err := validateMarker(rest); err != nil {
 			resp.Diagnostics.AddError("Invalid import ID", capitalize(err.Error())+".")
@@ -280,8 +282,10 @@ func (r *fileLineResource) ImportState(ctx context.Context, req resource.ImportS
 		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("marker"), rest)...)
 	} else {
 		resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("line"), rest)...)
+		m.Line = types.StringValue(rest)
 	}
-	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), req.ID)...)
+	// Not req.ID, which contains the line for lines; see fileLineModel.id.
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), m.id())...)
 }
 
 // apply makes the fragment described by plan present in the file. prev is
@@ -425,9 +429,16 @@ func (m *fileLineModel) spec() (*fragmentSpec, error) {
 	})
 }
 
-// id returns the import-compatible identifier of m.
+// fileLineIDSuffix ends the id of a resource managing a line.
+const fileLineIDSuffix = "line"
+
+// id returns the identifier of m: the path and the marker for blocks, and
+// the path and the constant fileLineIDSuffix for lines. The line itself is
+// deliberately left out. It may contain a secret, such as a password in a
+// configuration file, and Terraform does not carry the sensitivity of line
+// over to the computed id, so the id would print the secret in plans.
 func (m *fileLineModel) id() types.String {
-	key := m.Line.ValueString()
+	key := fileLineIDSuffix
 	if m.isBlock() {
 		key = m.Marker.ValueString()
 		if key == "" {

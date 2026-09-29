@@ -137,6 +137,119 @@ func TestRunCommandTimeoutKillsProcessGroup(t *testing.T) {
 	}
 }
 
+// readPIDFile returns the PID a test command wrote to p.
+func readPIDFile(t *testing.T, p string) int {
+	t.Helper()
+	raw, err := os.ReadFile(p)
+	if err != nil {
+		t.Fatalf("reading PID: %v", err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if err != nil {
+		t.Fatalf("parsing PID %q: %v", raw, err)
+	}
+	return pid
+}
+
+// waitProcessGone fails the test if pid is still alive after a few seconds.
+func waitProcessGone(t *testing.T, pid int) {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for processAlive(pid) {
+		if time.Now().After(deadline) {
+			_ = syscall.Kill(pid, syscall.SIGKILL)
+			t.Fatalf("process %d still alive after the timeout", pid)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
+// Regression test: the direct child exits at once, but a background process
+// it started keeps the output pipes open. The timeout must still kill the
+// process group; previously the child had already been reaped, the group
+// was never signalled, and the background process outlived the "killed"
+// command.
+func TestRunCommandTimeoutKillsGroupAfterChildExited(t *testing.T) {
+	pidFile := filepath.Join(t.TempDir(), "pid")
+	start := time.Now()
+	res, err := runCommand(context.Background(), execSpec{
+		Argv:           []string{"/bin/sh", "-c", `sleep 60 & echo $! > "$0"; echo started`, pidFile},
+		Timeout:        500 * time.Millisecond,
+		MaxOutputBytes: defaultMaxOutputBytes,
+	})
+	if err != nil {
+		t.Fatalf("runCommand: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 4*time.Second {
+		t.Errorf("runCommand took %s despite a 500ms timeout", elapsed)
+	}
+	if !res.TimedOut {
+		t.Errorf("TimedOut = false, want true (exit %d)", res.ExitCode)
+	}
+	if got := res.Stdout.String(); got != "started\n" {
+		t.Errorf("partial stdout = %q, want %q", got, "started\n")
+	}
+	waitProcessGone(t, readPIDFile(t, pidFile))
+}
+
+// A child that closes its output but keeps running must still be killed by
+// the timeout.
+func TestRunCommandTimeoutWithOutputClosed(t *testing.T) {
+	start := time.Now()
+	res, err := runCommand(context.Background(), execSpec{
+		Argv:           []string{"/bin/sh", "-c", `echo started; exec >/dev/null 2>&1; exec sleep 60`},
+		Timeout:        500 * time.Millisecond,
+		MaxOutputBytes: defaultMaxOutputBytes,
+	})
+	if err != nil {
+		t.Fatalf("runCommand: %v", err)
+	}
+	if elapsed := time.Since(start); elapsed > 4*time.Second {
+		t.Errorf("runCommand took %s despite a 500ms timeout", elapsed)
+	}
+	if !res.TimedOut || res.Stdout.String() != "started\n" {
+		t.Errorf("got timedOut=%v stdout=%q, want a timeout after %q", res.TimedOut, res.Stdout.String(), "started\n")
+	}
+}
+
+// Without a timeout, background processes holding the output open make the
+// run fail after execWaitDelay instead of hanging, and are left running.
+func TestRunCommandBackgroundProcessHoldsOutput(t *testing.T) {
+	old := execWaitDelay
+	execWaitDelay = 300 * time.Millisecond
+	t.Cleanup(func() { execWaitDelay = old })
+
+	pidFile := filepath.Join(t.TempDir(), "pid")
+	_, err := runCommand(context.Background(), execSpec{
+		Argv:           []string{"/bin/sh", "-c", `sleep 60 & echo $! > "$0"`, pidFile},
+		MaxOutputBytes: defaultMaxOutputBytes,
+	})
+	pid := readPIDFile(t, pidFile)
+	t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
+	if err == nil || !strings.Contains(err.Error(), "kept its standard output or standard error open") {
+		t.Errorf("runCommand error = %v, want one about background processes", err)
+	}
+	if !processAlive(pid) {
+		t.Errorf("background process %d was killed although no timeout was set", pid)
+	}
+}
+
+// A child that exits without reading a large stdin must not block the run.
+func TestRunCommandUnreadStdin(t *testing.T) {
+	res, err := runCommand(context.Background(), execSpec{
+		Argv:           []string{"/bin/true"},
+		Stdin:          strings.Repeat("x", 1<<20),
+		Timeout:        10 * time.Second,
+		MaxOutputBytes: defaultMaxOutputBytes,
+	})
+	if err != nil {
+		t.Fatalf("runCommand: %v", err)
+	}
+	if res.TimedOut || res.ExitCode != 0 {
+		t.Errorf("got exit=%d timedOut=%v, want a clean exit", res.ExitCode, res.TimedOut)
+	}
+}
+
 // processAlive reports whether pid exists and is not a zombie. The killed
 // grandchild is re-parented to PID 1, which may never reap it (for example in
 // a container whose init is the test binary), so a zombie counts as dead.

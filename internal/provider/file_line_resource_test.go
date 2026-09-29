@@ -76,7 +76,7 @@ func TestAccFileLine_lineLifecycle(t *testing.T) {
 					checkFileMode(p, 0o640),
 					checkLOwnership(p, "65534", "65534"),
 					checkNoTempFiles(dir),
-					resource.TestCheckResourceAttr(testFileLineResource, "id", p+":10.0.0.1 db"),
+					resource.TestCheckResourceAttr(testFileLineResource, "id", p+":line"),
 					resource.TestCheckResourceAttr(testFileLineResource, "create", "false"),
 					resource.TestCheckNoResourceAttr(testFileLineResource, "block"),
 				),
@@ -99,7 +99,7 @@ func TestAccFileLine_lineLifecycle(t *testing.T) {
 				},
 				Check: resource.ComposeAggregateTestCheckFunc(
 					checkFileContent(p, "127.0.0.1 localhost\n10.0.0.2 db\n::1 localhost\n"),
-					resource.TestCheckResourceAttr(testFileLineResource, "id", p+":10.0.0.2 db"),
+					resource.TestCheckResourceAttr(testFileLineResource, "id", p+":line"),
 				),
 			},
 			{
@@ -495,4 +495,78 @@ func checkNoTempFiles(dir string) resource.TestCheckFunc {
 		}
 		return nil
 	}
+}
+
+// Regression test: the id used to contain the managed line. Terraform does
+// not carry the sensitivity of line over to the computed id, so a secret
+// from a sensitive variable was printed in plain text in every plan.
+func TestAccFileLine_sensitiveLineNotInID(t *testing.T) {
+	const secret = "hunter2-do-not-print"
+	dir := t.TempDir()
+	p := filepath.Join(dir, "app.conf")
+	mustWrite(t, p, "user = app\n")
+	mustChmod(t, p, 0o600)
+
+	config := fmt.Sprintf(`
+variable "password" {
+  type      = string
+  sensitive = true
+  default   = %q
+}
+`, secret) + fileLineConfig(p, `  regexp = "^password\\s*="
+  line   = "password = ${var.password}"`)
+
+	notSecret := func(what, v string) error {
+		if strings.Contains(v, secret) {
+			return fmt.Errorf("%s contains the secret: %q", what, v)
+		}
+		return nil
+	}
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		CheckDestroy:             checkFileLineContent(p, "user = app\n"),
+		Steps: []resource.TestStep{
+			{
+				Config: config,
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{
+						plancheck.ExpectKnownValue(testFileLineResource, tfjsonpath.New("id"), knownvalue.StringExact(p+":line")),
+						plancheck.ExpectSensitiveValue(testFileLineResource, tfjsonpath.New("line")),
+					},
+				},
+				Check: resource.ComposeAggregateTestCheckFunc(
+					checkFileContent(p, "user = app\npassword = "+secret+"\n"),
+					checkFileMode(p, 0o600),
+					resource.TestCheckResourceAttr(testFileLineResource, "id", p+":line"),
+				),
+			},
+			{
+				// Drift in the secret line: the refreshed line is recorded in
+				// state, but the id stays free of it.
+				PreConfig: setFile(t, p, "user = app\npassword = old-"+secret+"\n"),
+				Config:    config,
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{
+						plancheck.ExpectResourceAction(testFileLineResource, plancheck.ResourceActionUpdate),
+						plancheck.ExpectKnownValue(testFileLineResource, tfjsonpath.New("id"), knownvalue.StringExact(p+":line")),
+					},
+				},
+				Check: resource.TestCheckResourceAttrWith(testFileLineResource, "id", func(v string) error { return notSecret("id", v) }),
+			},
+			{
+				// Import by <path>:<line> does not put the line into the id.
+				ResourceName:            testFileLineResource,
+				ImportState:             true,
+				ImportStateId:           p + ":password = " + secret,
+				ImportStateVerify:       true,
+				ImportStateVerifyIgnore: []string{"regexp"},
+				ImportStateCheck: func(states []*terraform.InstanceState) error {
+					if len(states) != 1 {
+						return fmt.Errorf("imported %d states, want 1", len(states))
+					}
+					return notSecret("imported id", states[0].ID)
+				},
+			},
+		},
+	})
 }

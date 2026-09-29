@@ -8,11 +8,16 @@ import (
 	"errors"
 	"fmt"
 	"hash"
+	"io"
+	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 	"unicode/utf8"
+
+	"golang.org/x/sys/unix"
 )
 
 // defaultMaxOutputBytes is the default per-stream cap on how much stdout and
@@ -20,9 +25,10 @@ import (
 const defaultMaxOutputBytes = 1 << 20
 
 // execWaitDelay bounds how long we wait for the output pipes to close after
-// the process group has been killed. A descendant that escaped the group (for
-// example with setsid) can keep the pipes open indefinitely.
-const execWaitDelay = 5 * time.Second
+// the command has exited or its process group has been killed. Background
+// processes, and descendants that escaped the group (for example with
+// setsid), can keep the pipes open indefinitely.
+var execWaitDelay = 5 * time.Second // A variable so tests can shorten it.
 
 // cappedOutput is an io.Writer that keeps at most limit bytes of what is
 // written to it while hashing and counting the full stream.
@@ -116,6 +122,13 @@ func (r *execResult) Truncated() bool { return r.Stdout.Truncated() || r.Stderr.
 // ctx is cancelled, the whole group is sent SIGKILL so that children spawned
 // by a shell wrapper do not outlive it. An error is returned only if the
 // command could not be run at all, or ctx itself was cancelled.
+//
+// The command counts as finished once the direct child has exited and its
+// standard output and standard error have been closed by every process
+// holding them. The direct child is not reaped until then: as long as it is
+// a zombie, its PID, which is also the process group ID, cannot be reused,
+// so the group can be killed safely even after the child itself has exited
+// and only background processes it started are still running.
 func runCommand(ctx context.Context, spec execSpec) (*execResult, error) {
 	runCtx := ctx
 	if spec.Timeout > 0 {
@@ -124,48 +137,176 @@ func runCommand(ctx context.Context, spec execSpec) (*execResult, error) {
 		defer cancel()
 	}
 
-	cmd := exec.CommandContext(runCtx, spec.Argv[0], spec.Argv[1:]...)
-	cmd.Env = spec.Env
-	cmd.Dir = spec.Dir
-	if spec.Stdin != "" {
-		cmd.Stdin = strings.NewReader(spec.Stdin)
-	}
 	res := &execResult{
 		Stdout: newCappedOutput(spec.MaxOutputBytes),
 		Stderr: newCappedOutput(spec.MaxOutputBytes),
 	}
-	cmd.Stdout = res.Stdout
-	cmd.Stderr = res.Stderr
+	cmd := exec.Command(spec.Argv[0], spec.Argv[1:]...)
+	cmd.Env = spec.Env
+	cmd.Dir = spec.Dir
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
-	cmd.Cancel = func() error {
-		// With Setpgid the child's PID is also its process group ID; a
-		// negative PID signals the whole group.
-		err := syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL)
-		if errors.Is(err, syscall.ESRCH) {
-			return nil
-		}
-		return err
-	}
-	cmd.WaitDelay = execWaitDelay
 
-	runErr := cmd.Run()
-	// A command that completed successfully just as the deadline passed is
-	// not treated as timed out.
-	if runErr != nil && ctx.Err() != nil {
-		return nil, fmt.Errorf("%s: interrupted: %w", spec.Argv[0], ctx.Err())
+	// The pipes are managed here rather than by os/exec, whose Wait reaps
+	// the child before the output has been drained. parentEnds are closed on
+	// return, childEnds as soon as the child has inherited them.
+	var parentEnds, childEnds []*os.File
+	defer func() {
+		for _, f := range append(parentEnds, childEnds...) {
+			_ = f.Close()
+		}
+	}()
+	outR, outW, err := os.Pipe()
+	if err != nil {
+		return nil, err
 	}
-	if runErr != nil && spec.Timeout > 0 && errors.Is(runCtx.Err(), context.DeadlineExceeded) {
+	parentEnds, childEnds = append(parentEnds, outR), append(childEnds, outW)
+	errR, errW, err := os.Pipe()
+	if err != nil {
+		return nil, err
+	}
+	parentEnds, childEnds = append(parentEnds, errR), append(childEnds, errW)
+	cmd.Stdout, cmd.Stderr = outW, errW
+	var inW *os.File
+	if spec.Stdin != "" {
+		inR, w, err := os.Pipe()
+		if err != nil {
+			return nil, err
+		}
+		inW = w
+		parentEnds, childEnds = append(parentEnds, inW), append(childEnds, inR)
+		cmd.Stdin = inR
+	}
+
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("%s: %w", spec.Argv[0], err)
+	}
+	pgid := cmd.Process.Pid
+	// Only the child may hold the write ends of its output pipes, or reading
+	// them would never see EOF.
+	for _, f := range childEnds {
+		_ = f.Close()
+	}
+	childEnds = nil
+
+	if inW != nil {
+		go func() {
+			// A child that exits without reading stdin makes this fail with
+			// EPIPE, and closing inW on return unblocks it; both are fine.
+			_, _ = io.WriteString(inW, spec.Stdin)
+			_ = inW.Close()
+		}()
+	}
+	outputDone := make(chan struct{})
+	go func() {
+		var wg sync.WaitGroup
+		for _, c := range []struct {
+			dst io.Writer
+			src *os.File
+		}{{res.Stdout, outR}, {res.Stderr, errR}} {
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				_, _ = io.Copy(c.dst, c.src)
+			}()
+		}
+		wg.Wait()
+		close(outputDone)
+	}()
+	childExited := make(chan struct{})
+	go func() {
+		waitExitedNoReap(pgid)
+		close(childExited)
+	}()
+
+	out, child := outputDone, childExited
+	var grace <-chan time.Time
+	var killed, stuck bool
+wait:
+	for out != nil || child != nil {
+		select {
+		case <-out:
+			out = nil
+		case <-child:
+			child = nil
+			if out != nil {
+				t := time.NewTimer(execWaitDelay)
+				defer t.Stop()
+				grace = t.C
+			}
+		case <-grace:
+			// Background processes still hold the output open. Leave them
+			// alone; the command did not time out.
+			stuck = true
+			break wait
+		case <-runCtx.Done():
+			// A command that completed just as the deadline passed is not
+			// treated as timed out.
+			if isClosed(outputDone) && isClosed(childExited) {
+				break wait
+			}
+			killed = true
+			if err := syscall.Kill(-pgid, syscall.SIGKILL); err != nil && !errors.Is(err, syscall.ESRCH) {
+				return nil, fmt.Errorf("%s: killing process group: %w", spec.Argv[0], err)
+			}
+			break wait
+		}
+	}
+	if killed {
+		// A descendant that escaped the group (for example with setsid) can
+		// keep the pipes open indefinitely.
+		t := time.NewTimer(execWaitDelay)
+		select {
+		case <-outputDone:
+		case <-t.C:
+		}
+		t.Stop()
+	}
+	// Unblock the readers if the output is still held open, then wait for
+	// them so that res is no longer written to.
+	_ = outR.Close()
+	_ = errR.Close()
+	<-outputDone
+	waitErr := cmd.Wait()
+
+	switch {
+	case killed && ctx.Err() != nil:
+		return nil, fmt.Errorf("%s: interrupted: %w", spec.Argv[0], ctx.Err())
+	case killed:
 		res.TimedOut = true
 		res.ExitCode = -1
 		return res, nil
+	case stuck:
+		return nil, fmt.Errorf("%s exited, but processes it started kept its standard output or standard error open for more than %s; "+
+			"redirect the output of background processes, for example to /dev/null", spec.Argv[0], execWaitDelay)
 	}
 	var exitErr *exec.ExitError
 	switch {
-	case runErr == nil:
-	case errors.As(runErr, &exitErr):
+	case waitErr == nil:
+	case errors.As(waitErr, &exitErr):
 		res.ExitCode = exitErr.ExitCode()
 	default:
-		return nil, fmt.Errorf("%s: %w", spec.Argv[0], runErr)
+		return nil, fmt.Errorf("%s: %w", spec.Argv[0], waitErr)
 	}
 	return res, nil
+}
+
+// waitExitedNoReap blocks until the process pid has exited, without reaping
+// it.
+func waitExitedNoReap(pid int) {
+	for {
+		var info unix.Siginfo
+		err := unix.Waitid(unix.P_PID, pid, &info, unix.WEXITED|unix.WNOWAIT, nil)
+		if !errors.Is(err, unix.EINTR) {
+			return
+		}
+	}
+}
+
+func isClosed(ch <-chan struct{}) bool {
+	select {
+	case <-ch:
+		return true
+	default:
+		return false
+	}
 }

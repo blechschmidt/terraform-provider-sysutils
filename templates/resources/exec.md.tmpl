@@ -16,7 +16,9 @@ By default, destroying the resource simply drops the captured results from state
 
 ## Timeouts
 
-Each command runs in its own process group. When `timeout` expires, the provider sends `SIGKILL` to the whole group, so a shell wrapper and everything it started are stopped together, and the apply or destroy fails with a `Command timed out` error that includes any output captured so far. A timeout is always an error, even with `fail_on_nonzero = false`. The same applies when Terraform itself is interrupted. Processes that detach into their own session (for example with `setsid` or a daemonising `nohup`) leave the group and are not killed.
+Each command runs in its own process group. When `timeout` expires, the provider sends `SIGKILL` to the whole group, so a shell wrapper and everything it started are stopped together, and the apply or destroy fails with a `Command timed out` error that includes any output captured so far. A timeout is always an error, even with `fail_on_nonzero = false`. The same applies when Terraform itself is interrupted. This includes processes the command started in the background that are still running when the timeout expires, even if the command itself has already exited. Processes that detach into their own session (for example with `setsid`) leave the group and are not killed.
+
+A command only counts as finished once every process holding its standard output or standard error has closed them. If the command exits but background processes it started keep them open for more than 5 seconds, and `timeout` does not expire first, the apply fails; redirect the output of background processes, for example to `/dev/null`, to keep them running.
 
 ## Output capture
 

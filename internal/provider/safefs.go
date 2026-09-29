@@ -27,8 +27,10 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"syscall"
+	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -258,8 +260,15 @@ type fileSnapshot struct {
 	dev, ino uint64
 	size     int64
 	mtime    int64 // Nanoseconds since the epoch.
+	// ctime changes with chmod, chown and extended attribute (ACL) changes,
+	// so comparing it detects a concurrent change of permissions that the
+	// replacement would otherwise silently revert.
+	ctime    int64
 	uid, gid uint32
 	mode     fs.FileMode // Permission and special bits only.
+	// xattrs are the extended attributes to carry over to a replacement
+	// file; see readXattrs. Only set by readRegularFileNoFollow.
+	xattrs map[string][]byte
 }
 
 func snapshotOf(p string, info fs.FileInfo) (*fileSnapshot, error) {
@@ -272,6 +281,7 @@ func snapshotOf(p string, info fs.FileInfo) (*fileSnapshot, error) {
 		ino:   st.Ino,
 		size:  info.Size(),
 		mtime: info.ModTime().UnixNano(),
+		ctime: time.Unix(int64(st.Ctim.Sec), int64(st.Ctim.Nsec)).UnixNano(), //nolint:unconvert // Not int64 on every platform.
 		uid:   st.Uid,
 		gid:   st.Gid,
 		mode:  info.Mode() & (fs.ModePerm | fs.ModeSetuid | fs.ModeSetgid | fs.ModeSticky),
@@ -280,7 +290,10 @@ func snapshotOf(p string, info fs.FileInfo) (*fileSnapshot, error) {
 
 // unchangedSince reports whether s and o describe the same, unmodified file.
 func (s *fileSnapshot) unchangedSince(o *fileSnapshot) bool {
-	return s.dev == o.dev && s.ino == o.ino && s.size == o.size && s.mtime == o.mtime
+	// Mode and ownership are compared directly as well, because timestamps
+	// may be too coarse to tell apart changes made in quick succession.
+	return s.dev == o.dev && s.ino == o.ino && s.size == o.size && s.mtime == o.mtime && s.ctime == o.ctime &&
+		s.mode == o.mode && s.uid == o.uid && s.gid == o.gid
 }
 
 // errFileChangedConcurrently is returned by replaceFileAtomic when the target
@@ -317,7 +330,140 @@ func readRegularFileNoFollow(p string, limit int64) ([]byte, *fileSnapshot, erro
 	if err != nil {
 		return nil, nil, err
 	}
+	if snap.xattrs, err = readXattrs(f); err != nil {
+		return nil, nil, fmt.Errorf("reading extended attributes of %q: %w", p, err)
+	}
 	return data, snap, nil
+}
+
+// readXattrs returns the extended attributes of f that a replacement file
+// must carry over: POSIX ACLs (system.posix_acl_access), the SELinux label
+// (security.selinux) and any other attribute the caller can read.
+//
+// Dropping them is not merely lossy. With an ACL, the group permission bits
+// of the mode hold the ACL mask rather than the owning group's permissions,
+// so a replacement with the same mode but without the ACL would grant the
+// owning group whatever the mask allows (typically more than before), and
+// a lost SELinux label can move a file out of its confinement domain.
+//
+// security.capability is left out on purpose: the kernel drops file
+// capabilities whenever file content is modified, and a text edit must not
+// be able to keep them.
+func readXattrs(f *os.File) (map[string][]byte, error) {
+	rc, err := f.SyscallConn()
+	if err != nil {
+		return nil, err
+	}
+	var attrs map[string][]byte
+	var opErr error
+	err = rc.Control(func(fd uintptr) {
+		names, err := xattrCall(func(buf []byte) (int, error) { return unix.Flistxattr(int(fd), buf) })
+		if err != nil {
+			if errors.Is(err, unix.ENOTSUP) {
+				return // The filesystem has no extended attributes.
+			}
+			opErr = err
+			return
+		}
+		for _, name := range strings.Split(strings.TrimRight(string(names), "\x00"), "\x00") {
+			if name == "" || name == "security.capability" {
+				continue
+			}
+			val, err := xattrCall(func(buf []byte) (int, error) { return unix.Fgetxattr(int(fd), name, buf) })
+			switch {
+			case errors.Is(err, unix.ENODATA):
+				continue // Removed since it was listed.
+			case err != nil:
+				opErr = fmt.Errorf("%s: %w", name, err)
+				return
+			}
+			if attrs == nil {
+				attrs = map[string][]byte{}
+			}
+			attrs[name] = val
+		}
+	})
+	if err != nil {
+		return nil, err
+	}
+	return attrs, opErr
+}
+
+// xattrCall calls fn, which follows the listxattr/getxattr size protocol,
+// with a buffer large enough for the result.
+func xattrCall(fn func(buf []byte) (int, error)) ([]byte, error) {
+	for {
+		n, err := fn(nil)
+		if err != nil {
+			return nil, err
+		}
+		if n == 0 {
+			return nil, nil
+		}
+		buf := make([]byte, n)
+		n, err = fn(buf)
+		if errors.Is(err, unix.ERANGE) {
+			continue // Grew between the two calls.
+		}
+		if err != nil {
+			return nil, err
+		}
+		return buf[:n], nil
+	}
+}
+
+// aclAccessXattr holds a file's POSIX access ACL.
+const aclAccessXattr = "system.posix_acl_access"
+
+// removeXattr removes the extended attribute name from f. It is not an error
+// if f does not have it, or the filesystem has no extended attributes.
+func removeXattr(f *os.File, name string) error {
+	rc, err := f.SyscallConn()
+	if err != nil {
+		return err
+	}
+	var opErr error
+	err = rc.Control(func(fd uintptr) {
+		opErr = unix.Fremovexattr(int(fd), name)
+	})
+	if err != nil {
+		return err
+	}
+	if errors.Is(opErr, unix.ENODATA) || errors.Is(opErr, unix.ENOTSUP) {
+		return nil
+	}
+	return opErr
+}
+
+// writeXattrs sets attrs on f. Failing to set any of them is an error, since
+// silently dropping an ACL can widen access to the file.
+func writeXattrs(f *os.File, attrs map[string][]byte) error {
+	if len(attrs) == 0 {
+		return nil
+	}
+	rc, err := f.SyscallConn()
+	if err != nil {
+		return err
+	}
+	// Sorted, so that errors are deterministic.
+	names := make([]string, 0, len(attrs))
+	for name := range attrs {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	var opErr error
+	err = rc.Control(func(fd uintptr) {
+		for _, name := range names {
+			if err := unix.Fsetxattr(int(fd), name, attrs[name], 0); err != nil {
+				opErr = fmt.Errorf("%s: %w", name, err)
+				return
+			}
+		}
+	})
+	if err != nil {
+		return err
+	}
+	return opErr
 }
 
 // replaceFileAtomic replaces the contents of target with data. orig is the
@@ -325,7 +471,8 @@ func readRegularFileNoFollow(p string, limit int64) ([]byte, *fileSnapshot, erro
 // should be created with mode newMode (owned by the current user).
 //
 // The data is written to a temporary file in the same directory, which gets
-// orig's owner, group and mode before any data is written to it, and is then
+// orig's owner, group, mode and extended attributes (including ACLs and the
+// SELinux label, see readXattrs) before any data is written to it, and is then
 // renamed over target. Readers therefore see either the old or the new
 // contents, never a partial file. rename(2) replaces the directory entry
 // without following it, so a symlink swapped in at target is replaced rather
@@ -359,9 +506,22 @@ func replaceFileAtomic(target string, data []byte, orig *fileSnapshot, newMode f
 			return fmt.Errorf("preserving ownership of %q: %w", target, err)
 		}
 	}
+	// A default ACL on dir gives the temporary file an access ACL that the
+	// original may not have had.
+	if orig != nil && orig.xattrs[aclAccessXattr] == nil {
+		if err := removeXattr(f, aclAccessXattr); err != nil {
+			return fmt.Errorf("removing inherited ACL from temporary file: %w", err)
+		}
+	}
 	// After chown, which may clear the setuid and setgid bits.
 	if err := f.Chmod(mode); err != nil {
 		return fmt.Errorf("setting mode: %w", err)
+	}
+	// After chmod: setting an ACL also sets the group bits to its mask.
+	if orig != nil {
+		if err := writeXattrs(f, orig.xattrs); err != nil {
+			return fmt.Errorf("preserving extended attributes of %q: %w", target, err)
+		}
 	}
 	if _, err := f.Write(data); err != nil {
 		return err

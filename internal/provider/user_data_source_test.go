@@ -191,3 +191,64 @@ data "sysutils_user" "test" {
 		},
 	})
 }
+
+// Regression test: getent treats an all-digit key as a uid, so the shell and
+// comment of an account named "N" used to be read from the account with uid
+// N instead. Two real accounts are created so that the name of one is the
+// uid of the other.
+func TestAccUserDataSource_numericName(t *testing.T) {
+	if _, err := exec.LookPath("useradd"); err != nil {
+		t.Skip("useradd not installed")
+	}
+	byUID := func(id string) error { _, err := user.LookupId(id); return err }
+	decoyUID := unusedID(t, byUID)
+	numericUID := decoyUID + 1
+	if byUID(strconv.Itoa(numericUID)) == nil {
+		t.Skipf("uid %d already in use", numericUID)
+	}
+	numericName := strconv.Itoa(decoyUID)
+	const decoyName = "tf_numeric_decoy"
+
+	addUser := func(args ...string) {
+		t.Helper()
+		out, err := exec.Command("useradd", append([]string{"-M", "-N", "-g", "65534"}, args...)...).CombinedOutput()
+		if err != nil {
+			t.Skipf("useradd %v: %v: %s", args, err, out)
+		}
+		name := args[len(args)-1]
+		t.Cleanup(func() { _ = exec.Command("userdel", name).Run() })
+	}
+	addUser("-u", strconv.Itoa(decoyUID), "-s", "/bin/false", "-c", "decoy", decoyName)
+	addUser("--badname", "-u", strconv.Itoa(numericUID), "-s", "/bin/sh", "-c", "numeric", numericName)
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: fmt.Sprintf(`
+data "sysutils_user" "test" {
+  name = %q
+}`, numericName),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("data.sysutils_user.test", "name", numericName),
+					resource.TestCheckResourceAttr("data.sysutils_user.test", "uid", strconv.Itoa(numericUID)),
+					resource.TestCheckResourceAttr("data.sysutils_user.test", "shell", "/bin/sh"),
+					resource.TestCheckResourceAttr("data.sysutils_user.test", "comment", "numeric"),
+				),
+			},
+			{
+				// Looking up by uid still finds the decoy, not the account
+				// whose name is that number.
+				Config: fmt.Sprintf(`
+data "sysutils_user" "test" {
+  uid = %d
+}`, decoyUID),
+				Check: resource.ComposeAggregateTestCheckFunc(
+					resource.TestCheckResourceAttr("data.sysutils_user.test", "name", decoyName),
+					resource.TestCheckResourceAttr("data.sysutils_user.test", "shell", "/bin/false"),
+					resource.TestCheckResourceAttr("data.sysutils_user.test", "comment", "decoy"),
+				),
+			},
+		},
+	})
+}

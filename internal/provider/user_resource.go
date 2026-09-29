@@ -345,21 +345,47 @@ type passwdEntry struct {
 	Shell   string
 }
 
+// getentPasswd runs "getent passwd" with the given keys.
+func getentPasswd(keys ...string) ([]byte, error) {
+	return exec.Command("getent", append([]string{"passwd"}, keys...)...).Output()
+}
+
 // readPasswdEntry looks up username through NSS with getent, so it sees the
 // same databases as os/user.
+//
+// getent treats an all-digit key as a uid, not a name, so for an account
+// named "1000" it would return the account with uid 1000 instead. Such
+// names are allowed by some directory services, so the name of the entry
+// getent returns is checked, and if it differs the whole database is listed
+// and searched by name.
 func readPasswdEntry(username string) (*passwdEntry, error) {
 	// Not every getent implementation understands "--", so a leading dash
 	// is refused rather than escaped.
 	if username == "" || strings.HasPrefix(username, "-") {
 		return nil, fmt.Errorf("invalid username %q", username)
 	}
-	out, err := exec.Command("getent", "passwd", username).Output()
+	out, err := getentPasswd(username)
 	if err != nil {
 		return nil, fmt.Errorf("getent passwd %s: %w", username, err)
 	}
 	// getent may print several lines if the name is not unique; the first
 	// is the one getpwnam, and so os/user, returns.
 	line, _, _ := strings.Cut(string(out), "\n")
+	if name, _, _ := strings.Cut(line, ":"); name != username {
+		if out, err = getentPasswd(); err != nil {
+			return nil, fmt.Errorf("getent passwd: %w", err)
+		}
+		line = ""
+		for _, l := range strings.Split(string(out), "\n") {
+			if name, _, _ := strings.Cut(l, ":"); name == username {
+				line = l
+				break
+			}
+		}
+		if line == "" {
+			return nil, fmt.Errorf("getent passwd: no entry named %q", username)
+		}
+	}
 	fields := strings.Split(line, ":")
 	if len(fields) != 7 {
 		return nil, fmt.Errorf("getent passwd %s: expected 7 colon-separated fields, got %d", username, len(fields))
