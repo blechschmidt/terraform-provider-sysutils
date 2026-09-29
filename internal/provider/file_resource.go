@@ -3,7 +3,6 @@ package provider
 import (
 	"context"
 	"errors"
-	"fmt"
 	"io/fs"
 	"os"
 	"os/user"
@@ -76,52 +75,15 @@ func (r *fileResource) Schema(_ context.Context, _ resource.SchemaRequest, resp 
 	}
 }
 
-func parseMode(s string) (fs.FileMode, error) {
-	v, err := strconv.ParseUint(s, 8, 32)
-	if err != nil {
-		return 0, fmt.Errorf("invalid octal mode %q: %w", s, err)
-	}
-	return fs.FileMode(v) & fs.ModePerm, nil
-}
-
-func formatMode(m fs.FileMode) string {
-	return fmt.Sprintf("0%o", m&fs.ModePerm)
-}
-
-func lookupUID(name string) (int, error) {
-	u, err := user.Lookup(name)
-	if err != nil {
-		return 0, err
-	}
-	return strconv.Atoi(u.Uid)
-}
-
-func lookupGID(name string) (int, error) {
-	g, err := user.LookupGroup(name)
-	if err != nil {
-		return 0, err
-	}
-	return strconv.Atoi(g.Gid)
-}
-
+// applyOwnership changes the owner and/or group of path. Empty values leave
+// the corresponding ID unchanged.
 func applyOwnership(path string, owner, group string) error {
 	if owner == "" && group == "" {
 		return nil
 	}
-	uid, gid := -1, -1
-	if owner != "" {
-		id, err := lookupUID(owner)
-		if err != nil {
-			return fmt.Errorf("looking up owner %q: %w", owner, err)
-		}
-		uid = id
-	}
-	if group != "" {
-		id, err := lookupGID(group)
-		if err != nil {
-			return fmt.Errorf("looking up group %q: %w", group, err)
-		}
-		gid = id
+	uid, gid, err := resolveOwnership(owner, group)
+	if err != nil {
+		return err
 	}
 	return os.Chown(path, uid, gid)
 }
