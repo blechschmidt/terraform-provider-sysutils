@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 )
@@ -18,6 +19,7 @@ var (
 	_ validator.String = symlinkTargetValidator{}
 	_ validator.String = accountNameValidator{}
 	_ validator.String = base64Validator{}
+	_ validator.String = durationValidator{}
 )
 
 // octalModePattern matches a three or four digit octal mode, optionally
@@ -246,5 +248,42 @@ func (v base64Validator) ValidateString(_ context.Context, req validator.StringR
 	}
 	if _, err := base64.StdEncoding.DecodeString(req.ConfigValue.ValueString()); err != nil {
 		resp.Diagnostics.AddAttributeError(req.Path, "Invalid base64", fmt.Sprintf("Value is not valid standard base64: %s.", err))
+	}
+}
+
+// validateDuration reports why s is not a positive Go duration string, or
+// returns nil if it is.
+func validateDuration(s string) error {
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return fmt.Errorf("%q is not a valid duration; use a number with a unit suffix such as \"30s\", \"5m\" or \"1h30m\"", s)
+	}
+	if d <= 0 {
+		return fmt.Errorf("duration %q must be greater than zero", s)
+	}
+	return nil
+}
+
+// durationValidator validates that a string attribute is a positive Go
+// duration as accepted by time.ParseDuration (e.g. "90s", "5m", "1h30m").
+type durationValidator struct{}
+
+// positiveDuration returns a validator.String enforcing a positive Go duration.
+func positiveDuration() validator.String { return durationValidator{} }
+
+func (v durationValidator) Description(_ context.Context) string {
+	return "value must be a positive Go duration such as \"30s\", \"5m\" or \"1h30m\""
+}
+
+func (v durationValidator) MarkdownDescription(ctx context.Context) string {
+	return v.Description(ctx)
+}
+
+func (v durationValidator) ValidateString(_ context.Context, req validator.StringRequest, resp *validator.StringResponse) {
+	if req.ConfigValue.IsNull() || req.ConfigValue.IsUnknown() {
+		return
+	}
+	if err := validateDuration(req.ConfigValue.ValueString()); err != nil {
+		resp.Diagnostics.AddAttributeError(req.Path, "Invalid duration", capitalize(err.Error())+".")
 	}
 }

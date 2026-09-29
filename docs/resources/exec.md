@@ -8,11 +8,21 @@ description: |-
 
 # sysutils_exec (Resource)
 
-Runs a command when the resource is created and again whenever any input attribute changes. The exit code, standard output, and standard error are recorded as computed attributes you can reference from other resources or outputs.
+Runs a command when the resource is created and again whenever any input attribute changes. The exit code, standard output, and standard error are recorded as computed attributes you can reference from other resources or outputs. An optional `destroy_command` runs when the resource is destroyed.
 
-Every input attribute is marked `RequiresReplace`, so changing `command`, `environment`, `triggers`, or any other argument destroys the resource and recreates it (which re-runs the command). This is the same pattern used by `null_resource`.
+Changing `command`, `environment`, `triggers` or any other input that affects the run destroys the resource and recreates it, which re-runs the command. This is the same pattern used by `null_resource`. The exceptions are `timeout` and `destroy_command`: changing them updates the resource in place without re-running anything.
 
-The resource has no meaningful destroy action — the command already ran at create time, and deleting the resource simply drops the captured results from state.
+By default, destroying the resource simply drops the captured results from state. Set `destroy_command` to run a command at destroy time as well — including when the resource is replaced, in which case the old `destroy_command` runs before the new `command`.
+
+## Timeouts
+
+Each command runs in its own process group. When `timeout` expires, the provider sends `SIGKILL` to the whole group, so a shell wrapper and everything it started are stopped together, and the apply or destroy fails with a `Command timed out` error that includes any output captured so far. A timeout is always an error, even with `fail_on_nonzero = false`. The same applies when Terraform itself is interrupted. Processes that detach into their own session (for example with `setsid` or a daemonising `nohup`) leave the group and are not killed.
+
+## Output capture
+
+At most `max_output_bytes` (1 MiB by default) of standard output, and separately of standard error, is stored in state. Anything beyond that is discarded, a marker line of the form `[sysutils_exec: output truncated, kept N of M bytes]` is appended, and `truncated` is set to `true`. `stdout_sha256` and `stderr_sha256` always hash the complete streams, so they can be used to detect changes in output that did not fit.
+
+With `sensitive_output = true`, the output is stored in `sensitive_stdout` and `sensitive_stderr` instead of `stdout` and `stderr`. Terraform redacts these in plans and CLI output and requires outputs that reference them to be marked `sensitive`. Error diagnostics then show only the hashes, not the output.
 
 ## Example Usage
 
@@ -74,6 +84,76 @@ output "probe_stderr" {
 }
 ```
 
+### Limit how long a command may run
+
+```terraform
+resource "sysutils_exec" "wait_for_db" {
+  # Poll until the database accepts connections, but give up after 2 minutes.
+  # On timeout the whole process group (the shell and every pg_isready it
+  # started) is killed and the apply fails.
+  command = ["/bin/sh", "-c", "until pg_isready -h 127.0.0.1; do sleep 2; done"]
+  timeout = "2m"
+}
+```
+
+### Undo a command on destroy
+
+```terraform
+resource "sysutils_exec" "register" {
+  command         = ["/usr/local/bin/inventory", "register", "--host", "web-1"]
+  destroy_command = ["/usr/local/bin/inventory", "deregister", "--host", "web-1"]
+
+  # Both commands run in this directory with this environment.
+  working_directory = "/var/lib/inventory"
+  environment = {
+    INVENTORY_URL = "https://inventory.example.com"
+  }
+  timeout = "30s"
+}
+```
+
+If `destroy_command` exits non-zero, the destroy fails and the resource stays in state. Fix the command (an in-place update) and destroy again, or set `fail_on_nonzero = false` to ignore destroy failures.
+
+### Capture secrets without showing them in plans
+
+```terraform
+resource "sysutils_exec" "api_token" {
+  command          = ["/usr/local/bin/issue-token", "--scope", "deploy"]
+  sensitive_output = true
+}
+
+# The token is redacted in plans and CLI output. stdout and stderr are null.
+output "api_token" {
+  value     = trimspace(sysutils_exec.api_token.sensitive_stdout)
+  sensitive = true
+}
+
+# The hash is not sensitive and can be used to detect that the token changed.
+output "api_token_sha256" {
+  value = sysutils_exec.api_token.stdout_sha256
+}
+```
+
+### Cap the output stored in state
+
+```terraform
+resource "sysutils_exec" "package_list" {
+  command = ["/usr/bin/dpkg-query", "-W", "-f", "$${Package} $${Version}\n"]
+
+  # Keep at most 64 KiB of each stream in state.
+  max_output_bytes = 65536
+}
+
+output "package_list_truncated" {
+  value = sysutils_exec.package_list.truncated
+}
+
+# The hash covers the complete output, even when it was truncated in state.
+output "package_list_sha256" {
+  value = sysutils_exec.package_list.stdout_sha256
+}
+```
+
 <!-- schema generated by tfplugindocs -->
 ## Schema
 
@@ -83,10 +163,14 @@ output "probe_stderr" {
 
 ### Optional
 
+- `destroy_command` (List of String) Command and arguments to run when the resource is destroyed, including when it is replaced. It uses the same `environment`, `inherit_parent_environment`, `working_directory` and `timeout` as `command`, but no `stdin`. A non-zero exit fails the destroy (and keeps the resource in state) unless `fail_on_nonzero` is `false`. Changing it updates the resource in place without re-running `command`, so a broken destroy command can be fixed before destroying.
 - `environment` (Map of String) Environment variables to pass to the child. If `inherit_parent_environment` is `false`, these are the only variables in the child's environment.
-- `fail_on_nonzero` (Boolean) If `true` (default), a non-zero exit code causes the apply to fail with the captured stderr in the diagnostic. If `false`, the exit code is recorded and the apply continues.
+- `fail_on_nonzero` (Boolean) If `true` (default), a non-zero exit code of `command` or `destroy_command` causes the apply or destroy to fail with the captured output in the diagnostic. If `false`, the exit code is recorded and the apply continues; a failing `destroy_command` is ignored.
 - `inherit_parent_environment` (Boolean) If `true` (default), the child process starts from the Terraform provider's environment and the keys in `environment` override specific values. If `false`, only the `environment` map is used.
+- `max_output_bytes` (Number) Maximum number of bytes of standard output, and separately of standard error, to store in state. Defaults to `1048576` (1 MiB). Output beyond the limit is discarded, a line starting with `[sysutils_exec: output truncated` is appended, and `truncated` is set. The command itself is not affected, and the hashes always cover the complete output. `0` stores no output at all.
+- `sensitive_output` (Boolean) If `true`, the captured output is stored in `sensitive_stdout` and `sensitive_stderr`, which Terraform redacts in plans and CLI output, and `stdout` and `stderr` are left null. Error diagnostics then omit the output as well. Defaults to `false`.
 - `stdin` (String) Data to pipe into the command's standard input.
+- `timeout` (String) Maximum run time of `command` and `destroy_command`, as a Go duration string such as `"30s"`, `"5m"` or `"1h30m"`. When it expires, the command's whole process group is killed with `SIGKILL` and the apply or destroy fails, regardless of `fail_on_nonzero`. Unset means no timeout. Changing it updates the resource in place without re-running `command`.
 - `triggers` (Map of String) Arbitrary map whose changes force re-execution. The values are not passed to the command; they exist solely to invalidate the resource.
 - `working_directory` (String) Working directory for the child process.
 
@@ -94,11 +178,19 @@ output "probe_stderr" {
 
 - `exit_code` (Number) Exit code returned by the command.
 - `id` (String) Opaque resource identifier.
-- `stderr` (String) Captured standard error.
-- `stdout` (String) Captured standard output.
+- `sensitive_stderr` (String, Sensitive) Captured standard error, capped at `max_output_bytes`, if `sensitive_output` is `true`; null otherwise.
+- `sensitive_stdout` (String, Sensitive) Captured standard output, capped at `max_output_bytes`, if `sensitive_output` is `true`; null otherwise.
+- `stderr` (String) Captured standard error, capped at `max_output_bytes`. Null if `sensitive_output` is `true`.
+- `stderr_sha256` (String) Hex-encoded SHA-256 of the complete standard error, including any part beyond `max_output_bytes`.
+- `stdout` (String) Captured standard output, capped at `max_output_bytes`. Null if `sensitive_output` is `true`.
+- `stdout_sha256` (String) Hex-encoded SHA-256 of the complete standard output, including any part beyond `max_output_bytes`.
+- `truncated` (Boolean) Whether standard output or standard error exceeded `max_output_bytes` and was truncated in state.
 
 ## Caveats
 
 - The command runs on the machine Terraform is executing on, not on any remote host. Use a provisioner or a dedicated SSH/WinRM provider for remote execution.
-- `stdout` and `stderr` are stored in Terraform state. Avoid printing secrets. If you must, use a state backend with encryption-at-rest.
-- Because every input forces replacement, Terraform will report a diff whenever any attribute changes — there is no in-place update.
+- `stdout` and `stderr` are stored in Terraform state. `sensitive_output` hides the output in plans and CLI output, but the state still contains it in plain text, like every sensitive value. If a command prints secrets, use a state backend with encryption-at-rest.
+- `stdout_sha256` and `stderr_sha256` are not sensitive. A SHA-256 hash does not protect a low-entropy secret, such as a short PIN, from brute force.
+- `command`, `stdin` and `environment` are stored in state in plain text, like every other input. They are shown in plans unless the value comes from a sensitive expression, such as a `sensitive` variable. To keep a secret out of state altogether, let the command read it from a file or a secret store itself.
+- Apart from `timeout` and `destroy_command`, every input forces replacement, so changing it re-runs the command.
+- `destroy_command` receives no `stdin`, and its output is shown only in diagnostics, never stored.

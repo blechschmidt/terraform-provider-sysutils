@@ -104,6 +104,16 @@ func TestStringValidators(t *testing.T) {
 		{"mode valid", octalMode(), types.StringValue("0750"), false},
 		{"mode invalid", octalMode(), types.StringValue("rwx"), true},
 		{"mode too long", octalMode(), types.StringValue("77777"), true},
+		{"duration null", positiveDuration(), types.StringNull(), false},
+		{"duration unknown", positiveDuration(), types.StringUnknown(), false},
+		{"duration seconds", positiveDuration(), types.StringValue("30s"), false},
+		{"duration compound", positiveDuration(), types.StringValue("1h30m"), false},
+		{"duration fractional", positiveDuration(), types.StringValue("1.5s"), false},
+		{"duration no unit", positiveDuration(), types.StringValue("30"), true},
+		{"duration zero", positiveDuration(), types.StringValue("0s"), true},
+		{"duration negative", positiveDuration(), types.StringValue("-5s"), true},
+		{"duration empty", positiveDuration(), types.StringValue(""), true},
+		{"duration garbage", positiveDuration(), types.StringValue("five minutes"), true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -125,7 +135,7 @@ func TestStringValidators(t *testing.T) {
 
 func TestValidatorDescriptions(t *testing.T) {
 	ctx := context.Background()
-	for _, v := range []validator.String{absolutePath(), absolutePathOrRoot(), octalMode()} {
+	for _, v := range []validator.String{absolutePath(), absolutePathOrRoot(), octalMode(), positiveDuration()} {
 		if v.Description(ctx) == "" || v.MarkdownDescription(ctx) == "" {
 			t.Errorf("%T has an empty description", v)
 		}
