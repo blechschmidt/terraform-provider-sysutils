@@ -2,12 +2,17 @@ package provider
 
 import (
 	"context"
+	"fmt"
+	"regexp"
 	"strings"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-framework/path"
+	fwresource "github.com/hashicorp/terraform-plugin-framework/resource"
+	"github.com/hashicorp/terraform-plugin-framework/resource/schema"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 )
 
 func TestValidateAbsolutePath(t *testing.T) {
@@ -125,4 +130,88 @@ func TestValidatorDescriptions(t *testing.T) {
 			t.Errorf("%T has an empty description", v)
 		}
 	}
+}
+
+// TestSchemasAttachValidators guards against the validators being dropped
+// from the resource schemas that share them.
+func TestSchemasAttachValidators(t *testing.T) {
+	resources := map[string]fwresource.Resource{
+		"sysutils_file":      NewFileResource(),
+		"sysutils_directory": NewDirectoryResource(),
+	}
+	want := map[string]validator.String{
+		"path": absolutePathValidator{},
+		"mode": octalModeValidator{},
+	}
+	for name, r := range resources {
+		var resp fwresource.SchemaResponse
+		r.Schema(context.Background(), fwresource.SchemaRequest{}, &resp)
+		if resp.Diagnostics.HasError() {
+			t.Fatalf("%s: schema diagnostics: %v", name, resp.Diagnostics)
+		}
+		for attr, wantV := range want {
+			a, ok := resp.Schema.Attributes[attr].(schema.StringAttribute)
+			if !ok {
+				t.Fatalf("%s: attribute %q is not a string attribute", name, attr)
+			}
+			found := false
+			for _, v := range a.Validators {
+				if v == wantV {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("%s: attribute %q is missing validator %T", name, attr, wantV)
+			}
+		}
+	}
+}
+
+// TestAccValidators_rejectInvalidConfig checks that invalid values are
+// rejected during validation, before any filesystem change is attempted, so
+// it does not require root.
+func TestAccValidators_rejectInvalidConfig(t *testing.T) {
+	type tc struct {
+		config  string
+		wantErr string
+	}
+	var cases []tc
+	for _, typ := range []string{"sysutils_file", "sysutils_directory"} {
+		extra := ""
+		if typ == "sysutils_file" {
+			extra = `content = "x"`
+		}
+		cases = append(cases,
+			tc{fmt.Sprintf(`resource %q "t" {
+  path = "relative/dir"
+  %s
+}`, typ, extra), `must be absolute`},
+			tc{fmt.Sprintf(`resource %q "t" {
+  path = "/tmp/sysutils-validator-test/"
+  %s
+}`, typ, extra), `canonical form`},
+			tc{fmt.Sprintf(`resource %q "t" {
+  path = "/"
+  %s
+}`, typ, extra), `filesystem root`},
+			tc{fmt.Sprintf(`resource %q "t" {
+  path = "/tmp/sysutils-validator-test"
+  mode = "0999"
+  %s
+}`, typ, extra), `Invalid mode`},
+		)
+	}
+
+	steps := make([]resource.TestStep, 0, len(cases))
+	for _, c := range cases {
+		steps = append(steps, resource.TestStep{
+			Config:      c.config,
+			PlanOnly:    true,
+			ExpectError: regexp.MustCompile(regexp.QuoteMeta(c.wantErr)),
+		})
+	}
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+		Steps:                    steps,
+	})
 }
