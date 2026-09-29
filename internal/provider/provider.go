@@ -29,6 +29,10 @@ type sysutilsProvider struct {
 	// loader of sysutils_kernel_module. It is nil in production and set by
 	// unit tests to temporary directories and a fake loader.
 	kernelModule *kernelModuleConfig
+	// cron overrides the cron.d directory and file owner of
+	// sysutils_cron_job. It is nil in production and set by tests to a
+	// temporary directory.
+	cron *cronConfig
 }
 
 // providerData is passed to resources that implement
@@ -38,6 +42,7 @@ type providerData struct {
 	mount        *mountConfig
 	sysctl       *sysctlConfig
 	kernelModule *kernelModuleConfig
+	cron         *cronConfig
 	// root is the directory that the paths of the file, file line, template
 	// file, directory and symlink resources and the file and directory data
 	// sources are confined to; see rootfs.go.
@@ -61,7 +66,7 @@ func (p *sysutilsProvider) Metadata(_ context.Context, _ provider.MetadataReques
 
 func (p *sysutilsProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *provider.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		MarkdownDescription: "The `sysutils` provider exposes a small set of primitives for host-level administration from Terraform: files, directories, symlinks, local users and groups, systemd units, mounts, kernel parameters and modules, and command execution. " +
+		MarkdownDescription: "The `sysutils` provider exposes a small set of primitives for host-level administration from Terraform: files, directories, symlinks, local users and groups, systemd units, mounts, kernel parameters and modules, cron jobs, and command execution. " +
 			"All arguments are optional.",
 		Attributes: map[string]schema.Attribute{
 			"root_dir": schema.StringAttribute{
@@ -101,7 +106,7 @@ func (p *sysutilsProvider) Configure(ctx context.Context, req provider.Configure
 			return
 		}
 	}
-	data := &providerData{systemd: p.systemd, mount: p.mount, sysctl: p.sysctl, kernelModule: p.kernelModule, root: root}
+	data := &providerData{systemd: p.systemd, mount: p.mount, sysctl: p.sysctl, kernelModule: p.kernelModule, cron: p.cron, root: root}
 	resp.ResourceData = data
 	resp.DataSourceData = data
 }
@@ -178,6 +183,7 @@ func (p *sysutilsProvider) Resources(_ context.Context) []func() resource.Resour
 		NewMountResource,
 		NewSysctlResource,
 		NewKernelModuleResource,
+		NewCronJobResource,
 	}
 }
 

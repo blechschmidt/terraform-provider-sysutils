@@ -484,7 +484,45 @@ func writeXattrs(f *os.File, attrs map[string][]byte) error {
 // container) rename fails with EBUSY. In that case, and only then, the file
 // is rewritten in place through an O_NOFOLLOW descriptor after re-checking
 // its identity; this is not atomic.
-func replaceFileAtomic(target string, data []byte, orig *fileSnapshot, newMode fs.FileMode) (err error) {
+func replaceFileAtomic(target string, data []byte, orig *fileSnapshot, newMode fs.FileMode) error {
+	attrs := replaceAttrs{mode: newMode}
+	if orig != nil {
+		attrs = replaceAttrs{
+			mode:    orig.mode,
+			chown:   true,
+			uid:     orig.uid,
+			gid:     orig.gid,
+			xattrs:  orig.xattrs,
+			dropACL: orig.xattrs[aclAccessXattr] == nil,
+		}
+	}
+	return replaceFileAtomicWith(target, data, orig, attrs)
+}
+
+// replaceAttrs are the attributes replaceFileAtomicWith gives the
+// replacement file before any data is written to it.
+type replaceAttrs struct {
+	mode fs.FileMode
+	// chown selects whether the file is given uid and gid. Otherwise it is
+	// owned by the current user, like any newly created file.
+	chown    bool
+	uid, gid uint32
+	// xattrs are set on the file after its mode; see readXattrs.
+	xattrs map[string][]byte
+	// dropACL removes an access ACL that the file inherited from a default
+	// ACL on the directory and that xattrs does not set.
+	dropACL bool
+}
+
+// replaceFileAtomicWith is replaceFileAtomic with explicitly given
+// attributes for the replacement file, whatever those of orig were. orig is
+// used only to detect concurrent modification.
+//
+// The attributes are applied before the rename, so the new contents never
+// appear with a mode or owner other than attrs, except on the non-atomic
+// in-place fallback for mount points, where the existing file is given the
+// attributes before its contents are replaced.
+func replaceFileAtomicWith(target string, data []byte, orig *fileSnapshot, attrs replaceAttrs) (err error) {
 	dir, base := filepath.Dir(target), filepath.Base(target)
 	tmp := filepath.Join(dir, "."+base+".sysutils-tmp-"+randomID())
 	f, err := openNoFollow(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
@@ -499,29 +537,8 @@ func replaceFileAtomic(target string, data []byte, orig *fileSnapshot, newMode f
 		}
 	}()
 
-	mode := newMode
-	if orig != nil {
-		mode = orig.mode
-		if err := chownToMatch(f, orig.uid, orig.gid); err != nil {
-			return fmt.Errorf("preserving ownership of %q: %w", target, err)
-		}
-	}
-	// A default ACL on dir gives the temporary file an access ACL that the
-	// original may not have had.
-	if orig != nil && orig.xattrs[aclAccessXattr] == nil {
-		if err := removeXattr(f, aclAccessXattr); err != nil {
-			return fmt.Errorf("removing inherited ACL from temporary file: %w", err)
-		}
-	}
-	// After chown, which may clear the setuid and setgid bits.
-	if err := f.Chmod(mode); err != nil {
-		return fmt.Errorf("setting mode: %w", err)
-	}
-	// After chmod: setting an ACL also sets the group bits to its mask.
-	if orig != nil {
-		if err := writeXattrs(f, orig.xattrs); err != nil {
-			return fmt.Errorf("preserving extended attributes of %q: %w", target, err)
-		}
+	if err := applyReplaceAttrs(f, attrs); err != nil {
+		return fmt.Errorf("%q: %w", target, err)
 	}
 	if _, err := f.Write(data); err != nil {
 		return err
@@ -541,7 +558,7 @@ func replaceFileAtomic(target string, data []byte, orig *fileSnapshot, newMode f
 	} else {
 		err = os.Rename(tmp, target)
 		if errors.Is(err, syscall.EBUSY) {
-			if err := rewriteInPlace(target, data, orig); err != nil {
+			if err := rewriteInPlace(target, data, orig, attrs); err != nil {
 				return err
 			}
 			return nil // The deferred function removes tmp.
@@ -552,6 +569,31 @@ func replaceFileAtomic(target string, data []byte, orig *fileSnapshot, newMode f
 	}
 	renamed = true
 	syncDir(dir)
+	return nil
+}
+
+// applyReplaceAttrs gives f the ownership, mode and extended attributes in
+// attrs.
+func applyReplaceAttrs(f *os.File, attrs replaceAttrs) error {
+	if attrs.chown {
+		if err := chownToMatch(f, attrs.uid, attrs.gid); err != nil {
+			return fmt.Errorf("setting ownership: %w", err)
+		}
+	}
+	// A default ACL on the directory gives a new file an access ACL.
+	if attrs.dropACL && attrs.xattrs[aclAccessXattr] == nil {
+		if err := removeXattr(f, aclAccessXattr); err != nil {
+			return fmt.Errorf("removing inherited ACL: %w", err)
+		}
+	}
+	// After chown, which may clear the setuid and setgid bits.
+	if err := f.Chmod(attrs.mode); err != nil {
+		return fmt.Errorf("setting mode: %w", err)
+	}
+	// After chmod: setting an ACL also sets the group bits to its mask.
+	if err := writeXattrs(f, attrs.xattrs); err != nil {
+		return fmt.Errorf("setting extended attributes: %w", err)
+	}
 	return nil
 }
 
@@ -623,7 +665,7 @@ func renameNoReplace(oldpath, newpath string) error {
 
 // rewriteInPlace overwrites target with data through an O_NOFOLLOW
 // descriptor, provided it is still the file described by orig.
-func rewriteInPlace(target string, data []byte, orig *fileSnapshot) error {
+func rewriteInPlace(target string, data []byte, orig *fileSnapshot, attrs replaceAttrs) error {
 	f, err := openNoFollow(target, os.O_WRONLY, 0)
 	if err != nil {
 		return err
@@ -642,6 +684,23 @@ func rewriteInPlace(target string, data []byte, orig *fileSnapshot) error {
 	}
 	if !cur.unchangedSince(orig) {
 		return fmt.Errorf("%q: %w", target, errFileChangedConcurrently)
+	}
+	// attrs are orig's own unless the caller forces other ones. Only what
+	// differs is changed; extended attributes other than the ACL stay.
+	if attrs.chown {
+		if err := chownToMatch(f, attrs.uid, attrs.gid); err != nil {
+			return fmt.Errorf("%q: setting ownership: %w", target, err)
+		}
+	}
+	if attrs.dropACL && attrs.xattrs[aclAccessXattr] == nil && orig.xattrs[aclAccessXattr] != nil {
+		if err := removeXattr(f, aclAccessXattr); err != nil {
+			return fmt.Errorf("%q: removing ACL: %w", target, err)
+		}
+	}
+	if cur.mode != attrs.mode || attrs.chown && (cur.uid != attrs.uid || cur.gid != attrs.gid) {
+		if err := f.Chmod(attrs.mode); err != nil {
+			return fmt.Errorf("%q: setting mode: %w", target, err)
+		}
 	}
 	if err := f.Truncate(0); err != nil {
 		return err
