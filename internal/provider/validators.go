@@ -287,3 +287,27 @@ func (v durationValidator) ValidateString(_ context.Context, req validator.Strin
 		resp.Diagnostics.AddAttributeError(req.Path, "Invalid duration", capitalize(err.Error())+".")
 	}
 }
+
+// unitNameValidator validates that a string attribute is a systemd unit name
+// according to validateUnitName.
+type unitNameValidator struct{}
+
+// unitName returns a validator.String enforcing validateUnitName.
+func unitName() validator.String { return unitNameValidator{} }
+
+func (v unitNameValidator) Description(_ context.Context) string {
+	return "value must be a systemd unit name such as \"app.service\""
+}
+
+func (v unitNameValidator) MarkdownDescription(ctx context.Context) string {
+	return v.Description(ctx)
+}
+
+func (v unitNameValidator) ValidateString(_ context.Context, req validator.StringRequest, resp *validator.StringResponse) {
+	if req.ConfigValue.IsNull() || req.ConfigValue.IsUnknown() {
+		return
+	}
+	if err := validateUnitName(req.ConfigValue.ValueString()); err != nil {
+		resp.Diagnostics.AddAttributeError(req.Path, "Invalid unit name", capitalize(err.Error())+".")
+	}
+}
