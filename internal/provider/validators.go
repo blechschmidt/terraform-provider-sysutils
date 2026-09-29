@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
@@ -14,6 +15,7 @@ var (
 	_ validator.String = absolutePathValidator{}
 	_ validator.String = octalModeValidator{}
 	_ validator.String = symlinkTargetValidator{}
+	_ validator.String = accountNameValidator{}
 )
 
 // octalModePattern matches a three or four digit octal mode, optionally
@@ -170,4 +172,53 @@ func capitalize(s string) string {
 		return s
 	}
 	return string(s[0]-'a'+'A') + s[1:]
+}
+
+// accountNamePattern matches user and group names accepted by the provider:
+// portable characters, not starting with "-" (which shadow-utils would parse
+// as an option), optionally ending in "$" for Samba machine accounts.
+var accountNamePattern = regexp.MustCompile(`^[A-Za-z0-9_][A-Za-z0-9_.-]*\$?$`)
+
+// validateAccountName reports why s is not an acceptable user or group name,
+// or returns nil if it is. Beyond accountNamePattern, names are limited to 32
+// bytes and must not be purely numeric, since they would be ambiguous with
+// numeric IDs.
+func validateAccountName(s string) error {
+	if s == "" {
+		return fmt.Errorf("name must not be empty")
+	}
+	if len(s) > 32 {
+		return fmt.Errorf("name %q must be at most 32 characters long", s)
+	}
+	if !accountNamePattern.MatchString(s) {
+		return fmt.Errorf("name %q must consist of letters, digits, \"_\", \".\" and \"-\", must not start with \"-\" or \".\", and may only end in \"$\"", s)
+	}
+	if _, err := strconv.ParseUint(s, 10, 64); err == nil {
+		return fmt.Errorf("name %q must not be purely numeric", s)
+	}
+	return nil
+}
+
+// accountNameValidator validates that a string attribute is a user or group
+// name according to validateAccountName.
+type accountNameValidator struct{}
+
+// accountName returns a validator.String enforcing validateAccountName.
+func accountName() validator.String { return accountNameValidator{} }
+
+func (v accountNameValidator) Description(_ context.Context) string {
+	return "value must be a valid user or group name"
+}
+
+func (v accountNameValidator) MarkdownDescription(ctx context.Context) string {
+	return v.Description(ctx)
+}
+
+func (v accountNameValidator) ValidateString(_ context.Context, req validator.StringRequest, resp *validator.StringResponse) {
+	if req.ConfigValue.IsNull() || req.ConfigValue.IsUnknown() {
+		return
+	}
+	if err := validateAccountName(req.ConfigValue.ValueString()); err != nil {
+		resp.Diagnostics.AddAttributeError(req.Path, "Invalid name", capitalize(err.Error())+".")
+	}
 }

@@ -39,6 +39,7 @@ func (p *sysutilsProvider) Resources(_ context.Context) []func() resource.Resour
 		NewDirectoryResource,
 		NewSymlinkResource,
 		NewUserResource,
+		NewGroupResource,
 		NewExecResource,
 	}
 }

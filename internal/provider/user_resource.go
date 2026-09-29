@@ -8,6 +8,7 @@ import (
 	"os/user"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/hashicorp/terraform-plugin-framework/attr"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
@@ -101,7 +102,14 @@ func (r *userResource) Schema(_ context.Context, _ resource.SchemaRequest, resp 
 	}
 }
 
+// accountDBMu serializes the shadow-utils commands run by the user and group
+// resources. They all lock /etc/passwd and /etc/group, and concurrent
+// invocations from parallel resource operations fail with "cannot lock".
+var accountDBMu sync.Mutex
+
 func runCmd(name string, args ...string) error {
+	accountDBMu.Lock()
+	defer accountDBMu.Unlock()
 	cmd := exec.Command(name, args...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
