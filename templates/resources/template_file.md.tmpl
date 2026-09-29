@@ -1,0 +1,113 @@
+---
+page_title: "sysutils_template_file Resource - terraform-provider-sysutils"
+subcategory: ""
+description: |-
+  Renders a template with variables inside the provider and writes the result to a file.
+---
+
+# sysutils_template_file (Resource)
+
+{{ .Description | trimspace }}
+
+Unlike `content = templatefile(...)` on [`sysutils_file`](./file.md), the template and its variables are inputs of the resource. This means:
+
+- A syntax error is reported by `terraform validate` and `terraform plan`, with the line and column in the template.
+- Secrets can be passed in `sensitive_vars`, which makes the rendered content sensitive (see [Sensitive values](#sensitive-values)).
+- The file is only rewritten when the rendered content differs from the file on disk. A template change that renders the same output doesn't touch the file.
+
+The file is otherwise handled like [`sysutils_file`](./file.md): parent directories are created with mode `0755`, mode and ownership are applied before the content is written, and a symlink at `path` is refused.
+
+## Example Usage
+
+### Go template syntax
+
+{{ tffile "examples/resources/sysutils_template_file/resource.tf" }}
+
+### Terraform template syntax
+
+{{ tffile "examples/resources/sysutils_template_file/terraform-syntax.tf" }}
+
+with `templates/hosts.tftpl`:
+
+{{ codefile "text" "examples/resources/sysutils_template_file/templates/hosts.tftpl" }}
+
+Write templates in Terraform syntax to a separate file and load them with `file()`. Inline in the configuration, Terraform would interpolate `${...}` and `%{...}` itself before the provider sees the template, unless they are escaped as `$${...}` and `%%{...}`.
+
+### Secrets
+
+{{ tffile "examples/resources/sysutils_template_file/sensitive.tf" }}
+
+{{ .SchemaMarkdown | trimspace }}
+
+## Template Syntax
+
+### Go (`syntax = "go"`)
+
+Templates use Go's [`text/template`](https://pkg.go.dev/text/template) package. A variable `name` is referenced as `{{"{{"}} .name {{"}}"}}`. Nested values use dots (`{{"{{"}} .db.user {{"}}"}}`) or `index`, and lists can be iterated with `range`. Whole numbers are integers, so `{{"{{"}} if eq .port 8080 {{"}}"}}` works. Referencing a variable that doesn't exist is an error, not an empty string.
+
+Besides the [built-in functions](https://pkg.go.dev/text/template#hdr-Functions) (`and`, `or`, `not`, `len`, `index`, `slice`, `print`, `printf`, `println`, `eq`, `ne`, `lt`, `le`, `gt`, `ge`, `html`, `js`, `urlquery`), the following are available. As in [sprig](https://masterminds.github.io/sprig/), the value being operated on comes last, so they can be used in pipelines such as `{{"{{"}} .name | replace "-" "_" | upper {{"}}"}}`:
+
+| Function | Result |
+|----------|--------|
+| `lower s`, `upper s` | `s` in lower or upper case |
+| `trim cutset s`, `trimSpace s`, `trimPrefix prefix s`, `trimSuffix suffix s` | `s` with characters, whitespace, a prefix or a suffix removed |
+| `replace old new s` | `s` with every `old` replaced by `new` |
+| `contains substr s`, `hasPrefix prefix s`, `hasSuffix suffix s` | Whether `s` contains, starts or ends with the given string |
+| `split sep s`, `join sep list` | Split a string into a list, join a list into a string |
+| `repeat n s` | `s` repeated `n` times |
+| `indent n s`, `nindent n s` | `s` with every non-empty line indented by `n` spaces; `nindent` also adds a leading newline |
+| `quote v` | `v` as a double-quoted, escaped string |
+| `default def v` | `v`, or `def` if `v` is empty (`""`, `0`, `false`, null or an empty list or map) |
+| `toJson v` | `v` encoded as JSON |
+| `b64enc s`, `b64dec s` | Base64 encoding and decoding |
+| `keys map` | The sorted keys of a map |
+
+### Terraform (`syntax = "terraform"`)
+
+Templates use Terraform's [string template syntax](https://developer.hashicorp.com/terraform/language/expressions/strings#string-templates), exactly as [`templatefile()`](https://developer.hashicorp.com/terraform/language/functions/templatefile) does: `${name}` interpolations and `%{ if }` / `%{ for }` directives, with `~` to strip whitespace. Variable names must be valid Terraform identifiers.
+
+The following Terraform functions are available: `abs`, `base64decode`, `base64encode`, `can`, `ceil`, `chomp`, `chunklist`, `coalesce`, `coalescelist`, `compact`, `concat`, `contains`, `csvdecode`, `distinct`, `element`, `endswith`, `flatten`, `floor`, `format`, `formatlist`, `indent`, `join`, `jsondecode`, `jsonencode`, `keys`, `length`, `log`, `lookup`, `lower`, `max`, `merge`, `min`, `parseint`, `pow`, `range`, `regex`, `regexall`, `replace`, `reverse`, `setintersection`, `setsubtract`, `setunion`, `signum`, `slice`, `sort`, `split`, `startswith`, `strrev`, `substr`, `title`, `tobool`, `tolist`, `tomap`, `tonumber`, `toset`, `tostring`, `trim`, `trimprefix`, `trimspace`, `trimsuffix`, `try`, `upper`, `values` and `zipmap`.
+
+### Restricted functions
+
+In both syntaxes, templates can't read files, environment variables or the clock, can't run commands and can't reach the network. Functions such as `file`, `templatefile`, `env`, `timestamp` and `uuid` don't exist. The output therefore depends only on `template` and the variables, which is what allows the provider to render it during plan and to compare it with the file on disk. Pass anything else in through `vars`, for example `vars = { hostname = data.sysutils_file.hostname.content }`.
+
+The rendered output is limited to 16 MiB.
+
+## Planning and Rendering
+
+- **Validation.** The template is parsed during `terraform validate` and `terraform plan`. A syntax error, an unknown function, a variable that is not defined, or `vars` that is not an object or map is reported as an error on the corresponding attribute, with the line and column in the template where the syntax allows it. Nothing is written.
+- **Plan.** If all inputs are known, the template is rendered during plan. `rendered` (or `rendered_sensitive`) and the checksums are then known in the plan, so the diff shows exactly what will be written and other resources can react to `content_sha256`. If an input is only known after apply, for example an attribute of a resource that is being created, the outputs are `(known after apply)` and the template is rendered during apply.
+- **Apply.** The file is rewritten only if its current content differs from the rendered output. Mode and ownership are reconciled either way.
+
+## Sensitive Values
+
+Terraform does not tell providers which values are marked sensitive. A sensitive value passed in `vars` is hidden in the plan's `vars` diff, but the rendered content in `rendered` would show it. Pass secrets in `sensitive_vars` instead:
+
+- The rendered content is stored in `rendered_sensitive`, which is marked sensitive, and `rendered` is null. This applies as soon as `sensitive_vars` is set, even to an empty object, so switching variables between the two attributes doesn't make `rendered` change type.
+- Drift is still detected through `content_sha256`.
+- Error messages about the template have the values of `sensitive_vars` (strings and numbers of four characters or more) replaced by `(sensitive value)`.
+
+Like all attributes, `rendered_sensitive` and `sensitive_vars` are stored in plain text in the state. Use a state backend that encrypts data at rest and restricts access.
+
+## Import
+
+An existing file can be imported using its absolute path:
+
+{{ codefile "shell" .ImportFile }}
+
+Only the file's checksums, mode, owner and group are read into state. The template and variables can't be recovered from the file, and the file's content isn't copied into `rendered`, because the file may contain secrets. The first apply after the import stores the template, variables and rendered content in state. It rewrites the file only if the rendered content differs from what is on disk.
+
+## Drift Detection
+
+On refresh, the provider reads the file and records its checksums, mode, owner and group. If the file was changed outside Terraform, the next plan shows an update and apply restores the rendered content, mode and ownership.
+
+If the file is valid UTF-8 text, its current content is also recorded in `rendered` (or `rendered_sensitive`), so the plan shows the change as a readable diff. Otherwise, only `content_sha256` and `content_md5` show the change.
+
+If `owner` or `group` is not set in the configuration, its current value is recorded in state but no change is ever planned for it. If the file has been deleted, it is removed from state and recreated on the next apply. If something other than a regular file, such as a directory or a symlink, now exists at `path`, refresh fails with an error rather than replacing or following it.
+
+## Caveats
+
+- The template, the variables and the rendered content are stored in Terraform state.
+- Like [`sysutils_file`](./file.md), the file is rewritten in place, not atomically. A process reading it during an apply may see partial content.
+- Destroy removes the file. It uses `unlink`, so if `path` has been replaced by a symlink, only the symlink is removed.
