@@ -841,3 +841,24 @@ resource "sysutils_archive_extract" "test" {
 		CheckDestroy: checkPathGone(dest),
 	})
 }
+
+func TestAccUpgradeLocal_sshAuthorizedKey(t *testing.T) {
+	requireRoot(t)
+	name := uniqueUsername("tfupssh")
+	home := filepath.Join(t.TempDir(), name)
+	resource.Test(t, resource.TestCase{
+		Steps: localUpgradeSteps(t, "sysutils_ssh_authorized_key", fmt.Sprintf(`
+resource "sysutils_user" "u" {
+  name        = %q
+  home        = %q
+  create_home = true
+}
+
+resource "sysutils_ssh_authorized_key" "test" {
+  user    = sysutils_user.u.name
+  key     = %q
+  options = ["no-pty"]
+}
+`, name, home, testSSHKeyText(testSSHKey(t, 9))+" upgrade")),
+	})
+}

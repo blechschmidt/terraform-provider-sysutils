@@ -45,6 +45,10 @@ type sysutilsProvider struct {
 	// system. It is nil in production and set by unit tests to a fake
 	// command runner and a temporary /run.
 	service *serviceConfig
+	// sshKey overrides how sysutils_ssh_authorized_key looks up users. It
+	// is nil in production and set by unit tests to their own account with a
+	// temporary home directory.
+	sshKey *sshKeyConfig
 }
 
 // providerData is passed to resources that implement
@@ -58,6 +62,7 @@ type providerData struct {
 	pkg          *packageConfig
 	repo         *repoConfig
 	service      *serviceConfig
+	sshKey       *sshKeyConfig
 	// root is the directory that the paths of the file, file line, template
 	// file, directory, symlink, archive extract, cron job and package repository resources and the file and
 	// directory data sources are confined to; see rootfs.go.
@@ -81,7 +86,7 @@ func (p *sysutilsProvider) Metadata(_ context.Context, _ provider.MetadataReques
 
 func (p *sysutilsProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *provider.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		MarkdownDescription: "The `sysutils` provider exposes a small set of primitives for host-level administration from Terraform: files, directories, symlinks, archives, local users and groups, systemd units and services, mounts, kernel parameters and modules, cron jobs, OS packages and package repositories, and command execution. " +
+		MarkdownDescription: "The `sysutils` provider exposes a small set of primitives for host-level administration from Terraform: files, directories, symlinks, archives, local users and groups, systemd units and services, mounts, kernel parameters and modules, cron jobs, SSH authorized keys, OS packages and package repositories, and command execution. " +
 			"All arguments are optional.",
 		Attributes: map[string]schema.Attribute{
 			"root_dir": schema.StringAttribute{
@@ -90,7 +95,7 @@ func (p *sysutilsProvider) Schema(_ context.Context, _ provider.SchemaRequest, r
 					"With `root_dir = \"/srv/rootfs\"`, a `sysutils_file` with `path = \"/etc/hosts\"` writes `/srv/rootfs/etc/hosts`. " +
 					"Use it to build a container or OS image root filesystem tree. " +
 					"Applies to the `sysutils_file`, `sysutils_file_line`, `sysutils_ini_value`, `sysutils_template_file`, `sysutils_directory`, `sysutils_symlink`, `sysutils_archive_extract` (its `destination`), `sysutils_cron_job` and `sysutils_package_repository` resources and the `sysutils_file` and `sysutils_directory` data sources; " +
-					"`sysutils_mount`, `sysutils_sysctl`, `sysutils_kernel_module`, `sysutils_service` and `sysutils_package` change the running host and refuse to plan when `root_dir` is set, as does `sysutils_package_repository` with `refresh_cache = true`. " +
+					"`sysutils_mount`, `sysutils_sysctl`, `sysutils_kernel_module`, `sysutils_service`, `sysutils_package` and `sysutils_ssh_authorized_key` change the running host and refuse to plan when `root_dir` is set, as does `sysutils_package_repository` with `refresh_cache = true`. " +
 					"`path` attributes, ids and import ids keep the path inside the root. " +
 					"Symlinks inside the root are resolved as they would be in a chroot: absolute link targets are relative to `root_dir`, and a link that leads above `root_dir` is an error, so no symlink in the tree can make the provider act outside it. " +
 					"Must be an absolute path in canonical form; symlinks in `root_dir` itself are followed. It must exist when a resource or data source is read or applied. " +
@@ -122,7 +127,7 @@ func (p *sysutilsProvider) Configure(ctx context.Context, req provider.Configure
 			return
 		}
 	}
-	data := &providerData{systemd: p.systemd, mount: p.mount, sysctl: p.sysctl, kernelModule: p.kernelModule, cron: p.cron, pkg: p.pkg, repo: p.repo, service: p.service, root: root}
+	data := &providerData{systemd: p.systemd, mount: p.mount, sysctl: p.sysctl, kernelModule: p.kernelModule, cron: p.cron, pkg: p.pkg, repo: p.repo, service: p.service, sshKey: p.sshKey, root: root}
 	resp.ResourceData = data
 	resp.DataSourceData = data
 }
@@ -223,6 +228,7 @@ func (p *sysutilsProvider) Resources(_ context.Context) []func() resource.Resour
 		NewSysctlResource,
 		NewKernelModuleResource,
 		NewCronJobResource,
+		NewSSHAuthorizedKeyResource,
 		NewPackageResource,
 		NewPackageRepositoryResource,
 	}

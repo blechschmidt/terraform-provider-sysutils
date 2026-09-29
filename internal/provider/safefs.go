@@ -266,6 +266,7 @@ type fileSnapshot struct {
 	ctime    int64
 	uid, gid uint32
 	mode     fs.FileMode // Permission and special bits only.
+	nlink    uint64
 	// xattrs are the extended attributes to carry over to a replacement
 	// file; see readXattrs. Only set by readRegularFileNoFollow.
 	xattrs map[string][]byte
@@ -285,6 +286,7 @@ func snapshotOf(p string, info fs.FileInfo) (*fileSnapshot, error) {
 		uid:   st.Uid,
 		gid:   st.Gid,
 		mode:  info.Mode() & (fs.ModePerm | fs.ModeSetuid | fs.ModeSetgid | fs.ModeSticky),
+		nlink: uint64(st.Nlink), //nolint:unconvert // Not uint64 on every platform.
 	}, nil
 }
 

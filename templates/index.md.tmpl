@@ -25,6 +25,7 @@ The `sysutils` provider exposes a small set of primitives for host-level adminis
 | [`sysutils_mount`](./resources/mount.md) | Mount a file system and manage its `/etc/fstab` entry, keeping the rest of the file intact. |
 | [`sysutils_sysctl`](./resources/sysctl.md) | Set a kernel parameter through `/proc/sys` and persist it in a `sysctl.d` file. |
 | [`sysutils_kernel_module`](./resources/kernel_module.md) | Load a kernel module with `modprobe` and have it loaded at boot, with its parameters. |
+| [`sysutils_ssh_authorized_key`](./resources/ssh_authorized_key.md) | Add a public key, with options and comment, to a user's `~/.ssh/authorized_keys`, without following symlinks the user may have planted. |
 | [`sysutils_cron_job`](./resources/cron_job.md) | Schedule a command with a file of its own in `/etc/cron.d`, owned by root with mode `0644`. |
 | [`sysutils_package`](./resources/package.md) | Install, upgrade, pin to a version or remove an OS package with `apt`, `dnf`, `yum` or `apk`. |
 | [`sysutils_package_repository`](./resources/package_repository.md) | Add an apt, dnf, yum or apk repository and its signing key, and refresh the package index. |
@@ -70,7 +71,7 @@ By default the provider manages paths on the host as they are written. Set `root
 
 {{ tffile "examples/provider/root_dir.tf" }}
 
-`root_dir` applies to the `sysutils_file`, `sysutils_file_line`, `sysutils_ini_value`, `sysutils_template_file`, `sysutils_directory`, `sysutils_symlink`, `sysutils_archive_extract`, `sysutils_cron_job` and `sysutils_package_repository` resources and to the `sysutils_file` and `sysutils_directory` data sources. It does not apply to `source` of `sysutils_file` and `sysutils_archive_extract` (a file on the machine running Terraform). `sysutils_mount`, `sysutils_sysctl`, `sysutils_kernel_module`, `sysutils_service` and `sysutils_package` change the running host itself, so they refuse to plan when `root_dir` is set, as does `sysutils_package_repository` with `refresh_cache = true`. Users, groups, systemd units and commands always act on the host. Use a separate, aliased provider configuration to mix both.
+`root_dir` applies to the `sysutils_file`, `sysutils_file_line`, `sysutils_ini_value`, `sysutils_template_file`, `sysutils_directory`, `sysutils_symlink`, `sysutils_archive_extract`, `sysutils_cron_job` and `sysutils_package_repository` resources and to the `sysutils_file` and `sysutils_directory` data sources. It does not apply to `source` of `sysutils_file` and `sysutils_archive_extract` (a file on the machine running Terraform). `sysutils_mount`, `sysutils_sysctl`, `sysutils_kernel_module`, `sysutils_service`, `sysutils_package` and `sysutils_ssh_authorized_key` change the running host itself, so they refuse to plan when `root_dir` is set, as does `sysutils_package_repository` with `refresh_cache = true`. Users, groups, systemd units and commands always act on the host. Use a separate, aliased provider configuration to mix both.
 
 Paths in the configuration, in the state, in ids and in import ids are always the paths *inside* the root, such as `/etc/nginx/nginx.conf`. Error messages show the host path the provider acted on.
 
