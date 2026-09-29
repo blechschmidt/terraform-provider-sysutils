@@ -12,6 +12,7 @@ The `sysutils` provider exposes a small set of primitives for host-level adminis
 | Resource | Purpose |
 |----------|---------|
 | [`sysutils_file`](./resources/file.md) | Write a file from text, base64 or a local source file, with mode and ownership; exposes content checksums. |
+| [`sysutils_file_line`](./resources/file_line.md) | Manage one line or a marker-delimited block inside an existing file, leaving the rest of the file alone. |
 | [`sysutils_directory`](./resources/directory.md) | Manage a directory with given mode and ownership. |
 | [`sysutils_symlink`](./resources/symlink.md) | Manage a symbolic link, switching its target atomically. |
 | [`sysutils_user`](./resources/user.md) | Create, update, and delete local users via `useradd`/`usermod`/`userdel`. |
@@ -55,10 +56,11 @@ resource "sysutils_file" "motd" {
 
 ## Security Model
 
-The provider usually runs as root and acts on paths that other local users may be able to influence, for example by creating entries in a shared directory such as `/tmp` before Terraform runs. The file, directory and symlink resources therefore follow these rules:
+The provider usually runs as root and acts on paths that other local users may be able to influence, for example by creating entries in a shared directory such as `/tmp` before Terraform runs. The file, file line, directory and symlink resources therefore follow these rules:
 
-- **The managed path itself is never followed if it is a symlink.** `sysutils_file` and `sysutils_directory` refuse to write, `chmod` or `chown` through a symlink at `path`, and fail instead. Files and directories are opened with `O_NOFOLLOW`, and mode and ownership are changed through that open descriptor (`fchmod`/`fchown`). Nothing can be swapped in between the check and the change. `sysutils_symlink` changes the ownership of the link itself with `lchown`. The `sysutils_file` data source likewise refuses to read through a symlink at `path` unless `follow_symlinks = true` is set explicitly.
+- **The managed path itself is never followed if it is a symlink.** `sysutils_file`, `sysutils_file_line` and `sysutils_directory` refuse to write, `chmod` or `chown` through a symlink at `path`, and fail instead. Files and directories are opened with `O_NOFOLLOW`, and mode and ownership are changed through that open descriptor (`fchmod`/`fchown`). Nothing can be swapped in between the check and the change. `sysutils_symlink` changes the ownership of the link itself with `lchown`. The `sysutils_file` data source likewise refuses to read through a symlink at `path` unless `follow_symlinks = true` is set explicitly.
 - **Ownership is applied before mode, and both are applied before new file content is written.** `chown` clears the setuid/setgid bits, so doing it first keeps modes such as `"4755"` intact. New content is never visible under the previous, possibly looser, mode.
+- **In-place edits are atomic and detect concurrent changes.** `sysutils_file_line` writes the edited file to a temporary file in the same directory, gives it the original file's owner, group and mode, and renames it over the original. Just before the rename it checks that the original was not modified or replaced since it was read, and aborts otherwise.
 - **Special files are refused.** A FIFO, socket or device at a file's `path` is reported as "not a regular file", so it never causes the provider to hang or to read from or write to it.
 - **Destroy removes only what the resource created.** It uses `unlink`/`rmdir`, which never follow symlinks. If something else has taken the managed path's place, destroy leaves it alone and emits a warning.
 - **Recursive deletion (`force_destroy`) is held to a stricter standard.** No component of the path may be a symlink, and the directory is deleted relative to open directory descriptors, so a component swapped out mid-way cannot redirect it. Deletion never crosses into another mounted filesystem. `/`, empty paths and a fixed list of critical system directories (such as `/etc`, `/usr`, `/var/lib` and `/home`) are refused, and the check runs at plan time.

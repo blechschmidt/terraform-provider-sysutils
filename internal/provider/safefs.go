@@ -23,6 +23,7 @@ package provider
 import (
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -248,4 +249,260 @@ func removeTreeAt(parent int, name, display string, dev uint64) error {
 		}
 	}
 	return nil
+}
+
+// fileSnapshot records the identity and attributes of a regular file at the
+// time it was read, so that a later in-place edit can detect whether the file
+// was replaced or modified in between and can preserve its mode and owner.
+type fileSnapshot struct {
+	dev, ino uint64
+	size     int64
+	mtime    int64 // Nanoseconds since the epoch.
+	uid, gid uint32
+	mode     fs.FileMode // Permission and special bits only.
+}
+
+func snapshotOf(p string, info fs.FileInfo) (*fileSnapshot, error) {
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return nil, fmt.Errorf("unable to determine ownership of %q on this platform", p)
+	}
+	return &fileSnapshot{
+		dev:   uint64(st.Dev), //nolint:unconvert // Dev is not uint64 on every platform.
+		ino:   st.Ino,
+		size:  info.Size(),
+		mtime: info.ModTime().UnixNano(),
+		uid:   st.Uid,
+		gid:   st.Gid,
+		mode:  info.Mode() & (fs.ModePerm | fs.ModeSetuid | fs.ModeSetgid | fs.ModeSticky),
+	}, nil
+}
+
+// unchangedSince reports whether s and o describe the same, unmodified file.
+func (s *fileSnapshot) unchangedSince(o *fileSnapshot) bool {
+	return s.dev == o.dev && s.ino == o.ino && s.size == o.size && s.mtime == o.mtime
+}
+
+// errFileChangedConcurrently is returned by replaceFileAtomic when the target
+// was modified, replaced or created by someone else after it was read.
+var errFileChangedConcurrently = errors.New("file was modified by another process while it was being edited; try again")
+
+// readRegularFileNoFollow reads the regular file p without following a
+// symlink at p. Files larger than limit bytes are refused. Errors for a
+// missing file wrap fs.ErrNotExist.
+func readRegularFileNoFollow(p string, limit int64) ([]byte, *fileSnapshot, error) {
+	f, err := openNoFollow(p, os.O_RDONLY, 0)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer func() { _ = f.Close() }()
+	info, err := f.Stat()
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := checkRegularFile(p, info); err != nil {
+		return nil, nil, err
+	}
+	if info.Size() > limit {
+		return nil, nil, fmt.Errorf("file %q is larger than %d bytes", p, limit)
+	}
+	data, err := io.ReadAll(io.LimitReader(f, limit+1))
+	if err != nil {
+		return nil, nil, err
+	}
+	if int64(len(data)) > limit {
+		return nil, nil, fmt.Errorf("file %q is larger than %d bytes", p, limit)
+	}
+	snap, err := snapshotOf(p, info)
+	if err != nil {
+		return nil, nil, err
+	}
+	return data, snap, nil
+}
+
+// replaceFileAtomic replaces the contents of target with data. orig is the
+// snapshot taken when target was read, or nil if target did not exist and
+// should be created with mode newMode (owned by the current user).
+//
+// The data is written to a temporary file in the same directory, which gets
+// orig's owner, group and mode before any data is written to it, and is then
+// renamed over target. Readers therefore see either the old or the new
+// contents, never a partial file. rename(2) replaces the directory entry
+// without following it, so a symlink swapped in at target is replaced rather
+// than written through. Immediately before the rename, target is checked
+// against orig and the edit is abandoned with errFileChangedConcurrently if
+// it was modified in the meantime.
+//
+// If target is a mount point (for example a bind-mounted /etc/hosts in a
+// container) rename fails with EBUSY. In that case, and only then, the file
+// is rewritten in place through an O_NOFOLLOW descriptor after re-checking
+// its identity; this is not atomic.
+func replaceFileAtomic(target string, data []byte, orig *fileSnapshot, newMode fs.FileMode) (err error) {
+	dir, base := filepath.Dir(target), filepath.Base(target)
+	tmp := filepath.Join(dir, "."+base+".sysutils-tmp-"+randomID())
+	f, err := openNoFollow(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
+	if err != nil {
+		return fmt.Errorf("creating temporary file: %w", err)
+	}
+	renamed := false
+	defer func() {
+		_ = f.Close()
+		if !renamed {
+			_ = os.Remove(tmp)
+		}
+	}()
+
+	mode := newMode
+	if orig != nil {
+		mode = orig.mode
+		if err := chownToMatch(f, orig.uid, orig.gid); err != nil {
+			return fmt.Errorf("preserving ownership of %q: %w", target, err)
+		}
+	}
+	// After chown, which may clear the setuid and setgid bits.
+	if err := f.Chmod(mode); err != nil {
+		return fmt.Errorf("setting mode: %w", err)
+	}
+	if _, err := f.Write(data); err != nil {
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+
+	if err := checkUnchanged(target, orig); err != nil {
+		return err
+	}
+	if orig == nil {
+		err = renameNoReplace(tmp, target)
+	} else {
+		err = os.Rename(tmp, target)
+		if errors.Is(err, syscall.EBUSY) {
+			if err := rewriteInPlace(target, data, orig); err != nil {
+				return err
+			}
+			return nil // The deferred function removes tmp.
+		}
+	}
+	if err != nil {
+		return err
+	}
+	renamed = true
+	syncDir(dir)
+	return nil
+}
+
+// chownToMatch changes the ownership of f to uid:gid, skipping the call when
+// it already matches so no privileges are needed in the common case.
+func chownToMatch(f *os.File, uid, gid uint32) error {
+	info, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return fmt.Errorf("unable to determine ownership of %q on this platform", f.Name())
+	}
+	if st.Uid == uid && st.Gid == gid {
+		return nil
+	}
+	return f.Chown(int(uid), int(gid))
+}
+
+// checkUnchanged verifies that target still matches orig, or still does not
+// exist if orig is nil.
+func checkUnchanged(target string, orig *fileSnapshot) error {
+	info, err := os.Lstat(target)
+	if orig == nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		return fmt.Errorf("%q: %w", target, errFileChangedConcurrently)
+	}
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("%q: %w", target, errFileChangedConcurrently)
+		}
+		return err
+	}
+	if err := checkRegularFile(target, info); err != nil {
+		return err
+	}
+	cur, err := snapshotOf(target, info)
+	if err != nil {
+		return err
+	}
+	if !cur.unchangedSince(orig) {
+		return fmt.Errorf("%q: %w", target, errFileChangedConcurrently)
+	}
+	return nil
+}
+
+// renameNoReplace renames oldpath to newpath, failing if newpath exists.
+// Filesystems without RENAME_NOREPLACE support fall back to a plain rename;
+// checkUnchanged has verified immediately before that newpath is absent.
+func renameNoReplace(oldpath, newpath string) error {
+	err := unix.Renameat2(unix.AT_FDCWD, oldpath, unix.AT_FDCWD, newpath, unix.RENAME_NOREPLACE)
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, unix.EEXIST):
+		return fmt.Errorf("%q: %w", newpath, errFileChangedConcurrently)
+	case errors.Is(err, unix.ENOSYS), errors.Is(err, unix.EINVAL):
+		return os.Rename(oldpath, newpath)
+	default:
+		return &os.LinkError{Op: "rename", Old: oldpath, New: newpath, Err: err}
+	}
+}
+
+// rewriteInPlace overwrites target with data through an O_NOFOLLOW
+// descriptor, provided it is still the file described by orig.
+func rewriteInPlace(target string, data []byte, orig *fileSnapshot) error {
+	f, err := openNoFollow(target, os.O_WRONLY, 0)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close() }()
+	info, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	if err := checkRegularFile(target, info); err != nil {
+		return err
+	}
+	cur, err := snapshotOf(target, info)
+	if err != nil {
+		return err
+	}
+	if !cur.unchangedSince(orig) {
+		return fmt.Errorf("%q: %w", target, errFileChangedConcurrently)
+	}
+	if err := f.Truncate(0); err != nil {
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		return err
+	}
+	if err := f.Sync(); err != nil {
+		return err
+	}
+	return f.Close()
+}
+
+// syncDir flushes the directory entry changes in dir to disk. Failures are
+// ignored: the rename has already taken effect and some filesystems do not
+// support fsync on directories.
+func syncDir(dir string) {
+	d, err := os.Open(dir)
+	if err != nil {
+		return
+	}
+	_ = d.Sync()
+	_ = d.Close()
 }
