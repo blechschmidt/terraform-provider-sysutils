@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"encoding/base64"
 	"fmt"
 	"path/filepath"
 	"regexp"
@@ -16,6 +17,7 @@ var (
 	_ validator.String = octalModeValidator{}
 	_ validator.String = symlinkTargetValidator{}
 	_ validator.String = accountNameValidator{}
+	_ validator.String = base64Validator{}
 )
 
 // octalModePattern matches a three or four digit octal mode, optionally
@@ -220,5 +222,29 @@ func (v accountNameValidator) ValidateString(_ context.Context, req validator.St
 	}
 	if err := validateAccountName(req.ConfigValue.ValueString()); err != nil {
 		resp.Diagnostics.AddAttributeError(req.Path, "Invalid name", capitalize(err.Error())+".")
+	}
+}
+
+// base64Validator validates that a string attribute is standard (RFC 4648,
+// padded) base64, as produced by Terraform's base64encode and filebase64.
+type base64Validator struct{}
+
+// base64String returns a validator.String enforcing standard base64.
+func base64String() validator.String { return base64Validator{} }
+
+func (v base64Validator) Description(_ context.Context) string {
+	return "value must be valid standard base64"
+}
+
+func (v base64Validator) MarkdownDescription(ctx context.Context) string {
+	return v.Description(ctx)
+}
+
+func (v base64Validator) ValidateString(_ context.Context, req validator.StringRequest, resp *validator.StringResponse) {
+	if req.ConfigValue.IsNull() || req.ConfigValue.IsUnknown() {
+		return
+	}
+	if _, err := base64.StdEncoding.DecodeString(req.ConfigValue.ValueString()); err != nil {
+		resp.Diagnostics.AddAttributeError(req.Path, "Invalid base64", fmt.Sprintf("Value is not valid standard base64: %s.", err))
 	}
 }
