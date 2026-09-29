@@ -31,6 +31,7 @@ const (
 	defaultDirectoryMode          = "0755"
 	defaultDirectoryCreateParents = true
 	defaultDirectoryForceDestroy  = false
+	defaultDirectoryRecursive     = false
 )
 
 func NewDirectoryResource() resource.Resource { return &directoryResource{} }
@@ -45,6 +46,18 @@ type directoryModel struct {
 	CreateParents types.Bool   `tfsdk:"create_parents"`
 	ForceDestroy  types.Bool   `tfsdk:"force_destroy"`
 	ID            types.String `tfsdk:"id"`
+
+	RecursiveOwner       types.Bool   `tfsdk:"recursive_owner"`
+	RecursiveMode        types.Bool   `tfsdk:"recursive_mode"`
+	FileMode             types.String `tfsdk:"file_mode"`
+	NonconformingEntries types.Int64  `tfsdk:"nonconforming_entries"`
+}
+
+// treeSpec returns the recursive enforcement settings of m. dirMode and
+// fileMode are passed explicitly because Read compares the tree against the
+// previously applied modes rather than the freshly refreshed ones.
+func (m *directoryModel) treeSpec(dirMode, fileMode string) (treeSpec, error) {
+	return newTreeSpec(m.RecursiveOwner.ValueBool(), m.RecursiveMode.ValueBool(), dirMode, fileMode)
 }
 
 func (r *directoryResource) Metadata(_ context.Context, req resource.MetadataRequest, resp *resource.MetadataResponse) {
@@ -53,51 +66,90 @@ func (r *directoryResource) Metadata(_ context.Context, req resource.MetadataReq
 
 func (r *directoryResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		Description: "Manages a directory on the local filesystem, including its mode and ownership.",
+		MarkdownDescription: "Ensures a directory exists at `path` with the requested `mode` and, optionally, `owner` / `group` (which require privileges). " +
+			"On update, mode and ownership are reconciled in place. " +
+			"On destroy, the directory is removed — but only if it is empty, unless `force_destroy` is set.",
 		Attributes: map[string]schema.Attribute{
 			"path": schema.StringAttribute{
-				Required:      true,
-				Description:   "Absolute path of the directory.",
+				Required: true,
+				MarkdownDescription: "Absolute path of the directory. " +
+					"Must be in canonical form (no `.`/`..` segments, duplicate or trailing slashes) and must not be `/`. " +
+					"Changing this forces a new resource.",
 				PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace()},
 				Validators:    []validator.String{absolutePath()},
 			},
 			"mode": schema.StringAttribute{
-				Optional:    true,
-				Computed:    true,
-				Default:     stringdefault.StaticString(defaultDirectoryMode),
-				Description: "Octal directory mode (e.g. \"0755\"). Applied explicitly, so it is not affected by the umask. Defaults to \"" + defaultDirectoryMode + "\".",
-				Validators:  []validator.String{octalMode()},
+				Optional: true,
+				Computed: true,
+				Default:  stringdefault.StaticString(defaultDirectoryMode),
+				MarkdownDescription: "Octal mode with 3 or 4 digits, optionally with a leading zero, such as `\"0755\"`, `\"750\"` or `\"1777\"`. " +
+					"Setuid, setgid and sticky bits are supported. " +
+					"The mode is applied with an explicit `chmod`, so the process umask does not affect it. Defaults to `\"0755\"`.",
+				Validators: []validator.String{octalMode()},
 			},
 			"owner": schema.StringAttribute{
-				Optional:      true,
-				Computed:      true,
-				Description:   "Username (or numeric UID) of the directory owner. Requires privileges to change. Defaults to the owner assigned on creation.",
+				Optional: true,
+				Computed: true,
+				MarkdownDescription: "Username or numeric UID that should own the directory. Requires privileges to change. " +
+					"If unset, the owner assigned at creation (normally the user running Terraform) is kept.",
 				PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
 			},
 			"group": schema.StringAttribute{
-				Optional:      true,
-				Computed:      true,
-				Description:   "Group name (or numeric GID) of the directory. Requires privileges to change. Defaults to the group assigned on creation.",
+				Optional: true,
+				Computed: true,
+				MarkdownDescription: "Group name or numeric GID of the directory. Requires privileges to change. " +
+					"If unset, the group assigned at creation is kept.",
 				PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
 			},
 			"create_parents": schema.BoolAttribute{
-				Optional:    true,
-				Computed:    true,
-				Default:     booldefault.StaticBool(defaultDirectoryCreateParents),
-				Description: "Create missing parent directories (like `mkdir -p`). Defaults to true.",
+				Optional: true,
+				Computed: true,
+				Default:  booldefault.StaticBool(defaultDirectoryCreateParents),
+				MarkdownDescription: "Create missing parent directories, like `mkdir -p`. " +
+					"Parents created this way get mode `0755` (subject to the umask) and are not removed on destroy. " +
+					"When `false`, creation fails if the parent does not exist. Defaults to `true`.",
 			},
 			"force_destroy": schema.BoolAttribute{
 				Optional: true,
 				Computed: true,
 				Default:  booldefault.StaticBool(defaultDirectoryForceDestroy),
-				Description: "Recursively delete the directory and all of its contents on destroy. When false, destroying a non-empty directory fails. " +
+				MarkdownDescription: "Delete the directory and everything in it on destroy. " +
+					"When `false`, destroying a non-empty directory fails with an error. " +
 					"The recursive delete refuses paths with a symlink in any component, never follows symlinks inside the tree, and never crosses into other mounted filesystems. " +
-					"Protected system directories such as /etc, /usr or /home cannot use it. Defaults to false.",
+					"Cannot be enabled for protected system directories such as `/etc`, `/usr` or `/home`. Defaults to `false`.",
 			},
 			"id": schema.StringAttribute{
-				Computed:      true,
-				Description:   "Resource identifier (the directory path).",
-				PlanModifiers: []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
+				Computed:            true,
+				MarkdownDescription: "Resource identifier (equal to `path`).",
+				PlanModifiers:       []planmodifier.String{stringplanmodifier.UseStateForUnknown()},
+			},
+			"recursive_owner": schema.BoolAttribute{
+				Optional: true,
+				Computed: true,
+				Default:  booldefault.StaticBool(defaultDirectoryRecursive),
+				MarkdownDescription: "Give every entry below the directory (files, subdirectories, symlinks and special files) the directory's own owner and group, like `chown -R`. " +
+					"If `owner` or `group` is not configured, the directory's current value is used. " +
+					"Symlinks inside the tree have their own ownership changed; they are never followed. Defaults to `false`.",
+			},
+			"recursive_mode": schema.BoolAttribute{
+				Optional: true,
+				Computed: true,
+				Default:  booldefault.StaticBool(defaultDirectoryRecursive),
+				MarkdownDescription: "Apply `mode` to every subdirectory and `file_mode` to every regular file below the directory, like `chmod -R`. " +
+					"Symlinks, FIFOs, sockets and device nodes are left alone. Defaults to `false`.",
+			},
+			"file_mode": schema.StringAttribute{
+				Optional: true,
+				MarkdownDescription: "Octal mode for regular files inside the tree, in the same format as `mode`. " +
+					"Only valid with `recursive_mode = true`. " +
+					"If unset, files get `mode`, exactly as with `chmod -R` — which makes every file executable if `mode` is a typical directory mode such as `\"0755\"`, so you usually want to set it.",
+				Validators: []validator.String{octalMode()},
+			},
+			"nonconforming_entries": schema.Int64Attribute{
+				Computed: true,
+				MarkdownDescription: "Number of entries below the directory whose ownership or mode did not match `recursive_owner` / `recursive_mode` at the last refresh. " +
+					"It is always `0` after apply and whenever recursion is disabled; a non-zero value is drift inside the tree (see [Drift Detection](#drift-detection)).",
+				PlanModifiers: []planmodifier.Int64{zeroAfterApply{}},
 			},
 		},
 	}
@@ -110,6 +162,10 @@ func (r *directoryResource) ValidateConfig(ctx context.Context, req resource.Val
 	resp.Diagnostics.Append(req.Config.Get(ctx, &cfg)...)
 	if resp.Diagnostics.HasError() {
 		return
+	}
+	if !cfg.FileMode.IsNull() && !cfg.RecursiveMode.IsUnknown() && !cfg.RecursiveMode.ValueBool() {
+		resp.Diagnostics.AddAttributeError(path.Root("file_mode"), "file_mode requires recursive_mode",
+			"file_mode only applies to files inside the directory and has no effect unless recursive_mode = true.")
 	}
 	if !cfg.ForceDestroy.ValueBool() || cfg.Path.IsNull() || cfg.Path.IsUnknown() {
 		return
@@ -154,6 +210,10 @@ func (r *directoryResource) Create(ctx context.Context, req resource.CreateReque
 		resp.Diagnostics.AddAttributeError(path.Root("path"), "Setting directory attributes", err.Error())
 		return
 	}
+	resp.Diagnostics.Append(conformDirectoryTree(ctx, target, &plan)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
 
 	found, diags := readDirectory(target, &plan)
 	resp.Diagnostics.Append(diags...)
@@ -175,6 +235,11 @@ func (r *directoryResource) Read(ctx context.Context, req resource.ReadRequest, 
 		return
 	}
 
+	// The tree is compared against the modes last applied, not the ones
+	// refreshed from the directory itself: drift of the directory's own mode
+	// is reported through the mode attribute.
+	appliedMode, appliedFileMode := knownString(state.Mode), knownString(state.FileMode)
+
 	found, diags := readDirectory(state.Path.ValueString(), &state)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
@@ -192,6 +257,24 @@ func (r *directoryResource) Read(ctx context.Context, req resource.ReadRequest, 
 	if state.ForceDestroy.IsNull() {
 		state.ForceDestroy = types.BoolValue(defaultDirectoryForceDestroy)
 	}
+	if state.RecursiveOwner.IsNull() {
+		state.RecursiveOwner = types.BoolValue(defaultDirectoryRecursive)
+	}
+	if state.RecursiveMode.IsNull() {
+		state.RecursiveMode = types.BoolValue(defaultDirectoryRecursive)
+	}
+
+	spec, err := state.treeSpec(appliedMode, appliedFileMode)
+	if err != nil {
+		resp.Diagnostics.AddError("Invalid mode in state", err.Error())
+		return
+	}
+	n, err := conformTree(ctx, state.Path.ValueString(), spec, false)
+	if err != nil {
+		resp.Diagnostics.AddAttributeError(path.Root("path"), "Inspecting directory contents", capitalize(err.Error())+".")
+		return
+	}
+	state.NonconformingEntries = types.Int64Value(n)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
 
@@ -221,6 +304,12 @@ func (r *directoryResource) Update(ctx context.Context, req resource.UpdateReque
 	}
 	if err := applyDirectoryAttributes(target, mode, owner, group); err != nil {
 		resp.Diagnostics.AddAttributeError(path.Root("path"), "Updating directory", err.Error())
+		return
+	}
+	// The tree is walked on every update: a non-zero nonconforming_entries
+	// may be the only reason for this update.
+	resp.Diagnostics.Append(conformDirectoryTree(ctx, target, &plan)...)
+	if resp.Diagnostics.HasError() {
 		return
 	}
 
@@ -301,6 +390,48 @@ func (r *directoryResource) ImportState(ctx context.Context, req resource.Import
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("id"), req.ID)...)
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("create_parents"), defaultDirectoryCreateParents)...)
 	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("force_destroy"), defaultDirectoryForceDestroy)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("recursive_owner"), defaultDirectoryRecursive)...)
+	resp.Diagnostics.Append(resp.State.SetAttribute(ctx, path.Root("recursive_mode"), defaultDirectoryRecursive)...)
+}
+
+// conformDirectoryTree applies the recursive ownership and mode settings of m
+// to everything below target and records the result in m. The directory's own
+// attributes must already have been applied, since the tree takes its owner
+// and group from the directory.
+func conformDirectoryTree(ctx context.Context, target string, m *directoryModel) diag.Diagnostics {
+	var diags diag.Diagnostics
+	spec, err := m.treeSpec(m.Mode.ValueString(), knownString(m.FileMode))
+	if err != nil {
+		diags.AddAttributeError(path.Root("file_mode"), "Invalid mode", err.Error())
+		return diags
+	}
+	if _, err := conformTree(ctx, target, spec, true); err != nil {
+		diags.AddAttributeError(path.Root("path"), "Applying attributes to directory contents", capitalize(err.Error())+".")
+		return diags
+	}
+	// Every entry found was corrected (or the walk failed above).
+	m.NonconformingEntries = types.Int64Value(0)
+	return diags
+}
+
+// zeroAfterApply plans nonconforming_entries as 0: after any apply the tree
+// conforms. A refreshed non-zero value therefore differs from the plan and
+// makes drift inside the tree trigger an update.
+type zeroAfterApply struct{}
+
+var _ planmodifier.Int64 = zeroAfterApply{}
+
+func (zeroAfterApply) Description(context.Context) string {
+	return "Planned as 0, the value after apply."
+}
+
+func (m zeroAfterApply) MarkdownDescription(ctx context.Context) string { return m.Description(ctx) }
+
+func (zeroAfterApply) PlanModifyInt64(_ context.Context, req planmodifier.Int64Request, resp *planmodifier.Int64Response) {
+	if req.Plan.Raw.IsNull() {
+		return
+	}
+	resp.PlanValue = types.Int64Value(0)
 }
 
 // ensureDirectory makes sure target exists as a directory. An existing

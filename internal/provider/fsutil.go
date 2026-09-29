@@ -54,6 +54,12 @@ func parseMode(s string) (fs.FileMode, error) {
 // octal string (e.g. "0644", "4755"), the inverse of parseMode. File type bits
 // such as fs.ModeDir are ignored.
 func formatMode(m fs.FileMode) string {
+	return fmt.Sprintf("%04o", unixModeBits(m))
+}
+
+// unixModeBits returns the permission and special bits of m in the numeric
+// form used by chmod(2) and st_mode (e.g. 04755). File type bits are ignored.
+func unixModeBits(m fs.FileMode) uint32 {
 	v := uint32(m & fs.ModePerm)
 	if m&fs.ModeSetuid != 0 {
 		v |= octalSetuid
@@ -64,7 +70,7 @@ func formatMode(m fs.FileMode) string {
 	if m&fs.ModeSticky != 0 {
 		v |= octalSticky
 	}
-	return fmt.Sprintf("%04o", v)
+	return v
 }
 
 // parseID parses a numeric UID/GID string. Negative values and values that
