@@ -513,7 +513,7 @@ func (a *aclFile) writeDefaultACL(acl posixACL) error {
 	}
 	if acl == nil {
 		if err := removeXattr(a.f, aclDefaultXattr); err != nil {
-			return fmt.Errorf("removing %s of %q: %w", aclDefaultXattr, a.f.Name(), err)
+			return explainImmutable(fmt.Errorf("removing %s of %q: %w", aclDefaultXattr, a.f.Name(), err), a.f.Name())
 		}
 		return nil
 	}
@@ -530,7 +530,7 @@ func (a *aclFile) setACLXattr(name string, acl posixACL) error {
 	case errors.Is(err, unix.ENOTSUP):
 		return fmt.Errorf("setting %s of %q: %w", name, a.f.Name(), errACLNotSupported)
 	case err != nil:
-		return fmt.Errorf("setting %s of %q to %s: %w", name, a.f.Name(), acl, err)
+		return explainImmutable(fmt.Errorf("setting %s of %q to %s: %w", name, a.f.Name(), acl, err), a.f.Name())
 	}
 	// The mode may have changed; refresh it for readAccessACL.
 	info, err := a.f.Stat()

@@ -343,7 +343,7 @@ func (r *templateFileResource) Delete(ctx context.Context, req resource.DeleteRe
 	}
 	// unlink never follows symlinks and never removes directories.
 	if err := syscall.Unlink(target); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		resp.Diagnostics.AddError("Removing file", (&fs.PathError{Op: "unlink", Path: target, Err: err}).Error())
+		resp.Diagnostics.AddError("Removing file", explainImmutable(&fs.PathError{Op: "unlink", Path: target, Err: err}, filepath.Dir(target)).Error())
 	}
 }
 

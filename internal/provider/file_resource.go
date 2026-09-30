@@ -331,7 +331,7 @@ func (r *fileResource) Delete(ctx context.Context, req resource.DeleteRequest, r
 	// unlink never follows symlinks and never removes directories, unlike
 	// os.Remove, which falls back to rmdir.
 	if err := syscall.Unlink(target); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		resp.Diagnostics.AddError("Removing file", (&fs.PathError{Op: "unlink", Path: target, Err: err}).Error())
+		resp.Diagnostics.AddError("Removing file", explainImmutable(&fs.PathError{Op: "unlink", Path: target, Err: err}, filepath.Dir(target)).Error())
 		return
 	}
 }
@@ -356,6 +356,11 @@ func (r *fileResource) ImportState(ctx context.Context, req resource.ImportState
 // and mode are applied before the new content is written, so content never
 // becomes visible under a more permissive mode or previous owner.
 func writeFile(target string, content io.Reader, mode fs.FileMode, owner, group string) (checksums, error) {
+	sums, err := writeFileTo(target, content, mode, owner, group)
+	return sums, explainImmutable(err, target, filepath.Dir(target))
+}
+
+func writeFileTo(target string, content io.Reader, mode fs.FileMode, owner, group string) (checksums, error) {
 	if info, err := os.Lstat(target); err == nil {
 		if err := checkRegularFile(target, info); err != nil {
 			return checksums{}, err

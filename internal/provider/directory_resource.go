@@ -205,7 +205,7 @@ func (r *directoryResource) Create(ctx context.Context, req resource.CreateReque
 	}
 
 	if err := ensureDirectory(target, plan.CreateParents.ValueBool()); err != nil {
-		resp.Diagnostics.AddAttributeError(path.Root("path"), "Creating directory", err.Error())
+		resp.Diagnostics.AddAttributeError(path.Root("path"), "Creating directory", explainImmutable(err, filepath.Dir(target)).Error())
 		return
 	}
 	// Mkdir honors the umask, so the requested mode is always applied
@@ -410,7 +410,7 @@ func (r *directoryResource) Delete(ctx context.Context, req resource.DeleteReque
 		resp.Diagnostics.AddWarning("Directory already replaced",
 			fmt.Sprintf("Path %q is no longer a directory and was left untouched.", target))
 	default:
-		resp.Diagnostics.AddError("Removing directory", (&fs.PathError{Op: "rmdir", Path: target, Err: err}).Error())
+		resp.Diagnostics.AddError("Removing directory", explainImmutable(&fs.PathError{Op: "rmdir", Path: target, Err: err}, filepath.Dir(target)).Error())
 	}
 }
 

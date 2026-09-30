@@ -142,7 +142,7 @@ func (r *symlinkResource) Create(ctx context.Context, req resource.CreateRequest
 	// Owner and group are unknown when not configured; ValueString returns ""
 	// for unknown values, which means "leave unchanged".
 	if err := replaceSymlink(link, target, plan.Owner.ValueString(), plan.Group.ValueString()); err != nil {
-		resp.Diagnostics.AddAttributeError(path.Root("path"), "Creating symlink", err.Error())
+		resp.Diagnostics.AddAttributeError(path.Root("path"), "Creating symlink", explainImmutable(err, filepath.Dir(link)).Error())
 		return
 	}
 
@@ -219,7 +219,7 @@ func (r *symlinkResource) Update(ctx context.Context, req resource.UpdateRequest
 		err = fmt.Errorf("path %q exists but is not a symlink", link)
 	}
 	if err != nil {
-		resp.Diagnostics.AddAttributeError(path.Root("path"), "Updating symlink", err.Error())
+		resp.Diagnostics.AddAttributeError(path.Root("path"), "Updating symlink", explainImmutable(err, filepath.Dir(link)).Error())
 		return
 	}
 
@@ -271,7 +271,7 @@ func (r *symlinkResource) Delete(ctx context.Context, req resource.DeleteRequest
 	// unlike os.Remove it never falls back to rmdir if a directory has been
 	// swapped in since the Lstat above.
 	if err := syscall.Unlink(link); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		resp.Diagnostics.AddError("Removing symlink", (&fs.PathError{Op: "unlink", Path: link, Err: err}).Error())
+		resp.Diagnostics.AddError("Removing symlink", explainImmutable(&fs.PathError{Op: "unlink", Path: link, Err: err}, filepath.Dir(link)).Error())
 	}
 }
 

@@ -98,6 +98,10 @@ func symlinkRefusedError(p string) error {
 // when nothing changes. Empty owner or group values leave the corresponding
 // attribute unchanged.
 func setOwnershipAndMode(f *os.File, owner, group string, mode fs.FileMode) error {
+	return explainImmutable(setOwnershipAndModeOf(f, owner, group, mode), f.Name())
+}
+
+func setOwnershipAndModeOf(f *os.File, owner, group string, mode fs.FileMode) error {
 	if owner != "" || group != "" {
 		uid, gid, err := resolveOwnership(owner, group)
 		if err != nil {
@@ -136,6 +140,10 @@ func setOwnershipAndMode(f *os.File, owner, group string, mode fs.FileMode) erro
 // relative to an open directory descriptor, so swapping a path component for
 // a symlink mid-way cannot redirect the deletion. A missing p is not an error.
 func removeAllNoFollow(p string) error {
+	return explainImmutable(removeAllNoFollowOf(p), p, filepath.Dir(p))
+}
+
+func removeAllNoFollowOf(p string) error {
 	if err := validateRecursivelyRemovable(p); err != nil {
 		return fmt.Errorf("%w: %w", errNotRecursivelyRemovable, err)
 	}
@@ -538,6 +546,7 @@ type replaceAttrs struct {
 // attributes before its contents are replaced.
 func replaceFileAtomicWith(target string, data []byte, orig *fileSnapshot, attrs replaceAttrs) (err error) {
 	dir, base := filepath.Dir(target), filepath.Base(target)
+	defer func() { err = explainImmutable(err, target, dir) }()
 	tmp := filepath.Join(dir, "."+base+".sysutils-tmp-"+randomID())
 	f, err := openNoFollow(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
@@ -624,7 +633,7 @@ func removeManagedFile(p string, orig *fileSnapshot) error {
 		return err
 	}
 	if err := os.Remove(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return err
+		return explainImmutable(err, p, filepath.Dir(p))
 	}
 	syncDir(filepath.Dir(p))
 	return nil

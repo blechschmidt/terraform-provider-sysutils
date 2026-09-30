@@ -21,7 +21,9 @@ testacc:
 # profile let the tests mount a tmpfs inside the container's own mount
 # namespace; the host's mounts are not affected. NET_ADMIN lets the firewall
 # rule tests change the firewall of network namespaces they create inside
-# the container; the host's firewall is not affected either. Docker's
+# the container; the host's firewall is not affected either.
+# LINUX_IMMUTABLE lets the file_attributes tests set the immutable and
+# append-only flags of their own temporary files. Docker's
 # default seccomp profile blocks swapon, so the swap tests need an unconfined
 # one; they enable swap files only in their own directory below /tmp, which
 # is an anonymous volume because swap files can't be on the image's overlay
@@ -43,7 +45,7 @@ testacc-docker:
 		--build-arg TF_CLI=$(TF_CLI) \
 		--build-arg TF_CLI_VERSION=$(TF_CLI_VERSION) \
 		-t $(TESTACC_IMAGE) .
-	docker run --rm --cap-add SYS_ADMIN --cap-add NET_ADMIN --security-opt apparmor=unconfined \
+	docker run --rm --cap-add SYS_ADMIN --cap-add NET_ADMIN --cap-add LINUX_IMMUTABLE --security-opt apparmor=unconfined \
 		--security-opt seccomp=unconfined -v /tmp \
 		$(TESTACC_UPGRADE_ARGS) $(TESTACC_IMAGE)
 

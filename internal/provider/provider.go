@@ -300,6 +300,7 @@ func (p *sysutilsProvider) Resources(_ context.Context) []func() resource.Resour
 		NewPackageRepositoryResource,
 		NewAlternativesResource,
 		NewFileACLResource,
+		NewFileAttributesResource,
 		NewLimitsResource,
 	}
 }

@@ -14,8 +14,9 @@ set -euo pipefail
 # and sysctl tests (no CAP_SYS_MODULE and a read-only /proc/sys in a
 # container), the swap tests on loop devices (a container has none; the
 # swap file tests do run), and the local-baseline upgrade tests
-# unless SYSUTILS_UPGRADE_FROM_REF is set, as it is in CI.
-: "${ACC_ALLOWED_SKIPS:=systemd is not PID 1|OpenRC did not boot this host|is not in any release yet|CAP_SYS_MODULE is not in the effective capability set|the kernel does not allow setting [^ ]+ here|cannot attach a loop device|SYSUTILS_UPGRADE_FROM_REF is not set}"
+# unless SYSUTILS_UPGRADE_FROM_REF is set, as it is in CI, and the
+# file_attributes tests if the file system below /tmp has no inode flags.
+: "${ACC_ALLOWED_SKIPS:=the file system of [^ ]+ does not support inode flags|systemd is not PID 1|OpenRC did not boot this host|is not in any release yet|CAP_SYS_MODULE is not in the effective capability set|the kernel does not allow setting [^ ]+ here|cannot attach a loop device|SYSUTILS_UPGRADE_FROM_REF is not set}"
 export ACC_ALLOWED_SKIPS
 
 if [ "$(id -u)" -ne 0 ]; then

@@ -370,7 +370,7 @@ func (r *remoteFileResource) apply(ctx context.Context, plan, state *remoteFileM
 			diags.AddAttributeError(path.Root("url"), "Download failed", capitalize(err.Error())+".")
 			return "", diags
 		}
-		if err := file.install(target, mode, owner, group); err != nil {
+		if err := explainImmutable(file.install(target, mode, owner, group), target, filepath.Dir(target)); err != nil {
 			diags.AddError("Installing downloaded file", capitalize(err.Error())+".")
 			return "", diags
 		}
@@ -533,7 +533,7 @@ func (r *remoteFileResource) Delete(ctx context.Context, req resource.DeleteRequ
 	defer unlock()
 	// unlink never follows symlinks and never removes directories.
 	if err := syscall.Unlink(target); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		resp.Diagnostics.AddError("Removing file", (&fs.PathError{Op: "unlink", Path: target, Err: err}).Error())
+		resp.Diagnostics.AddError("Removing file", explainImmutable(&fs.PathError{Op: "unlink", Path: target, Err: err}, filepath.Dir(target)).Error())
 		return
 	}
 	syncDir(filepath.Dir(target))

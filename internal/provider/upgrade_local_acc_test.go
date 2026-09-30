@@ -1152,3 +1152,19 @@ resource "sysutils_remote_file" "test" {
 		CheckDestroy: checkPathGone(target),
 	})
 }
+
+func TestAccUpgradeLocal_fileAttributes(t *testing.T) {
+	requireImmutableCapability(t)
+	dir := testFileAttrDir(t)
+	p := filepath.Join(dir, "data")
+	mustWrite(t, p, "")
+	resource.Test(t, resource.TestCase{
+		Steps: localUpgradeSteps(t, "sysutils_file_attributes", fmt.Sprintf(`
+resource "sysutils_file_attributes" "test" {
+  path       = %q
+  attributes = ["i", "d"]
+}
+`, p)),
+		CheckDestroy: checkFileAttrs(p, ""),
+	})
+}

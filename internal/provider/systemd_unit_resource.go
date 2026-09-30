@@ -349,7 +349,7 @@ func (r *systemdUnitResource) Delete(ctx context.Context, req resource.DeleteReq
 
 	// unlink never follows symlinks and never removes directories.
 	if err := syscall.Unlink(target); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		resp.Diagnostics.AddError("Removing unit file", (&fs.PathError{Op: "unlink", Path: target, Err: err}).Error())
+		resp.Diagnostics.AddError("Removing unit file", explainImmutable(&fs.PathError{Op: "unlink", Path: target, Err: err}, filepath.Dir(target)).Error())
 		return
 	}
 	if err := sc.do(ctx, "daemon-reload"); err != nil {

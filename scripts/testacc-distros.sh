@@ -42,8 +42,10 @@ read -r -a images <<<"${*:-${DISTROS:-debian:stable alpine:latest fedora:latest}
 # Skips allowed on every distribution: no systemd as PID 1, no module loading
 # or writable /proc/sys, and no swapon in a container, and the upgrade tests,
 # which need go and git. Whether su's PAM session runs pam_limits depends on
-# the distribution (Debian ships it commented out).
-common_skips='the su PAM session does not use pam_limits on this host|systemd is not PID 1|is not in any release yet|CAP_SYS_MODULE is not in the effective capability set|the kernel does not allow setting [^ ]+ here|swapon is not permitted here|SYSUTILS_UPGRADE_FROM_REF is not set'
+# the distribution (Debian ships it commented out). The file_attributes
+# tests run on the container's overlayfs (there are no loop devices for an
+# ext4 image), which has inode flags only on kernels >= 5.15.
+common_skips='the file system of [^ ]+ does not support inode flags|the su PAM session does not use pam_limits on this host|systemd is not PID 1|is not in any release yet|CAP_SYS_MODULE is not in the effective capability set|the kernel does not allow setting [^ ]+ here|swapon is not permitted here|SYSUTILS_UPGRADE_FROM_REF is not set'
 
 # allowed_skips IMAGE prints the skip reasons allowed on IMAGE on top of
 # common_skips.
@@ -109,8 +111,10 @@ for image in "${images[@]}"; do
 	status=0
 	# SYS_ADMIN and an unconfined AppArmor profile let the tests mount a
 	# tmpfs and create network namespaces inside the container; NET_ADMIN
-	# lets the firewall tests change the firewall of those namespaces. The
-	# host's mounts and firewall are not affected. --init: the test binary
+	# lets the firewall tests change the firewall of those namespaces, and
+	# LINUX_IMMUTABLE lets the file_attributes tests set the immutable and
+	# append-only flags of their own temporary files. The host's mounts and
+	# firewall are not affected. --init: the test binary
 	# must not be PID 1, which would leave the daemons that OpenRC's
 	# start-stop-daemon orphans unreaped, so that stopping them never
 	# completes ("process refused to stop"). Everything runs as root, so
@@ -118,7 +122,7 @@ for image in "${images[@]}"; do
 	# from gaining more. No credentials, sockets or host paths other than
 	# the read-only bundle are passed in.
 	docker run --rm --init --pull missing \
-		--cap-add SYS_ADMIN --cap-add NET_ADMIN --security-opt apparmor=unconfined \
+		--cap-add SYS_ADMIN --cap-add NET_ADMIN --cap-add LINUX_IMMUTABLE --security-opt apparmor=unconfined \
 		--security-opt no-new-privileges \
 		-e TF_CLI="$TF_CLI" -e ACC_TIMEOUT -e SYSUTILS_ACC_PACKAGE \
 		-v "$out:/sysutils:ro" \
