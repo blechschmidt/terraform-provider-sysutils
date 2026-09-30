@@ -304,7 +304,13 @@ func TestAccLogrotate_validation(t *testing.T) {
 			step("app", paths+"  create_mode = \"0640\"\n  create_group = \"adm\"", `create_group\s+requires\s+create_owner`),
 			step("app", paths+"  create_mode = \"0640\"\n  create_owner = \"root\"", `create_owner\s+requires\s+create_group(.|\n)*3\.22`),
 			step("app", paths+"  create_mode = \"0640\"\n  create_owner = \"root adm\"\n  create_group = \"adm\"", `must\s+consist\s+of\s+letters`),
-			step("app", paths+`  postrotate = "kill -HUP 1\nendscript\nrm -rf /"`, `must\s+not\s+contain\s+a\s+line\s+"endscript"`),
+			step("app", paths+`  postrotate = "kill -HUP 1\nendscript\nrm -rf /"`, `must\s+not\s+contain\s+a\s+line\s+starting\s+with\s+"endscript"`),
+			// logrotate ends the script at "endscript;" too and parses the
+			// rest of the line as directives.
+			step("app", paths+`  postrotate = "kill -HUP 1\n  endscript } /var/log/y {\n"`, `must\s+not\s+contain\s+a\s+line\s+starting\s+with\s+"endscript"`),
+			// ... and the rest of a line after a flag directive.
+			step("app", paths+`  extra_directives = ["missingok postrotate"]`, `scripts\s+span\s+several\s+lines`),
+			step("app", paths+`  extra_directives = ["notifempty include /etc/other"]`, `include\s+is\s+not\s+valid`),
 			step("app", paths+`  extra_directives = ["prerotate"]`, `scripts\s+span\s+several\s+lines`),
 			step("app", paths+`  extra_directives = ["}\n/etc/shadow {"]`, `must\s+not\s+contain\s+"{"`),
 			step("app", paths+`  extra_directives = ["include /etc/other"]`, `include\s+is\s+not\s+valid`),

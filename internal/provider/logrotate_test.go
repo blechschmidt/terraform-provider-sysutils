@@ -84,6 +84,15 @@ func TestValidateLogrotateDirective(t *testing.T) {
 		"dateext\nweekly":   "single line",
 		"maxsize 1\x00":     "single line",
 		"firstaction   foo": "scripts",
+		// logrotate parses the rest of the line after a directive without
+		// arguments as further directives, separated by blanks or "=".
+		"missingok postrotate":       "scripts",
+		"compress\tprerotate":        "scripts",
+		"missingok=firstaction":      "scripts",
+		"dateext lastaction":         "scripts",
+		"notifempty include /etc/x":  "include",
+		"missingok = include /etc/x": "include",
+		"su root adm endscript":      "scripts",
 	} {
 		err := validateLogrotateDirective(d)
 		if err == nil || !strings.Contains(err.Error(), want) {
@@ -110,6 +119,11 @@ func TestLogrotateSpecValidate(t *testing.T) {
 		{"owner without group", func(s *logrotateSpec) { s.createMode, s.createOwner = "0640", "root" }, "create_group", "requires create_group"},
 		{"bad owner", func(s *logrotateSpec) { s.createMode, s.createOwner, s.createGroup = "0640", "0", "adm" }, "create_owner", "numeric"},
 		{"script", func(s *logrotateSpec) { s.postrotate = "kill -HUP 1\n  endscript\n" }, "postrotate", "endscript"},
+		// logrotate compares the letters at the start of a line with
+		// "endscript" and parses the rest as directives.
+		{"script endscript;", func(s *logrotateSpec) { s.postrotate = "kill -HUP 1\nendscript; rm -rf /\n" }, "postrotate", "endscript"},
+		{"script endscript }", func(s *logrotateSpec) { s.postrotate = "true\n\tendscript }\n/var/log/y {\n" }, "postrotate", "endscript"},
+		{"script endscripts", func(s *logrotateSpec) { s.postrotate = "true\n  endscripts\n" }, "postrotate", "endscript"},
 		{"conflicting extra", func(s *logrotateSpec) { s.compress = ptr(true); s.extra = []string{"nocompress"} }, "extra_directives", "conflicts with compress"},
 		{"conflicting create", func(s *logrotateSpec) { s.createMode = "0600"; s.extra = []string{"nocreate"} }, "extra_directives", "conflicts with create_mode"},
 		{"conflicting frequency", func(s *logrotateSpec) { s.frequency = "daily"; s.extra = []string{"weekly 1"} }, "extra_directives", "conflicts with frequency"},
@@ -250,6 +264,7 @@ func TestParseLogrotateFile_errors(t *testing.T) {
 		"relative {\n}\n":     "must be absolute",
 		"\"/var/log/x {\n}\n": "unterminated quote",
 		"/var/log/x {\n  postrotate\n  a\n  endscript\n  postrotate\n  b\n  endscript\n}\n": "second postrotate",
+		"/var/log/x {\n  postrotate\n  a\n  endscript }\n/var/log/y {\n}\n":                 "on a line of its own",
 	} {
 		_, err := parseLogrotateFile(content)
 		if err == nil || !strings.Contains(err.Error(), want) {

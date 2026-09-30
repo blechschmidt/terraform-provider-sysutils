@@ -162,13 +162,35 @@ func validateLogrotateDirective(d string) error {
 			return fmt.Errorf("directive %q must be a single line without control characters", d)
 		}
 	}
-	switch kw := logrotateKeyword(d); {
-	case kw == "include":
-		return fmt.Errorf("directive %q is not allowed: include is not valid inside a block", d)
-	case slices.Contains(logrotateScriptKeywords, kw):
-		return fmt.Errorf("directive %q is not allowed: scripts span several lines; use the postrotate attribute, and manage files with other scripts with sysutils_file", d)
+	// logrotate goes on parsing the rest of the line after a directive
+	// without arguments, such as "missingok", as further directives
+	// separated by blanks or "=": "missingok postrotate" starts a script
+	// and "missingok include /etc/x" includes a file. So no word of the
+	// line may be one of those keywords.
+	for _, kw := range logrotateWords(d) {
+		switch {
+		case kw == "include":
+			return fmt.Errorf("directive %q is not allowed: include is not valid inside a block", d)
+		case slices.Contains(logrotateScriptKeywords, kw):
+			return fmt.Errorf("directive %q is not allowed: scripts span several lines; use the postrotate attribute, and manage files with other scripts with sysutils_file", d)
+		}
 	}
 	return nil
+}
+
+// logrotateWords splits a directive line into words the way logrotate
+// separates keywords: at blanks and "=".
+func logrotateWords(line string) []string {
+	return strings.FieldsFunc(line, func(c rune) bool { return c == ' ' || c == '\t' || c == '=' })
+}
+
+// isLogrotateEndscript reports whether logrotate ends a script at line:
+// logrotate 3.x skips blanks and compares the letters that follow with
+// "endscript", and parses the rest of the line as directives, so
+// "endscript; x" and "endscript }" end the script too. Older versions only
+// compared the prefix, so "endscripts" counts as well.
+func isLogrotateEndscript(line string) bool {
+	return strings.HasPrefix(strings.TrimLeft(line, " \t"), "endscript")
 }
 
 // validateLogrotateScript reports why s cannot be the postrotate script.
@@ -182,8 +204,8 @@ func validateLogrotateScript(s string) error {
 		return fmt.Errorf("script must be at most %d bytes long", maxLogrotateFileSize/2)
 	}
 	for _, line := range strings.Split(s, "\n") {
-		if strings.TrimSpace(line) == "endscript" {
-			return errors.New("script must not contain a line \"endscript\", which would end it early")
+		if isLogrotateEndscript(line) {
+			return fmt.Errorf("script must not contain a line starting with \"endscript\", which would end it early: %q", line)
 		}
 	}
 	return nil
@@ -417,11 +439,14 @@ func parseLogrotateFile(content string) (*logrotateSpec, error) {
 				return nil, fmt.Errorf("line %d: a second postrotate script", i+1)
 			}
 			var script strings.Builder
-			for i++; i < len(lines) && strings.TrimSpace(lines[i]) != "endscript"; i++ {
+			for i++; i < len(lines) && !isLogrotateEndscript(lines[i]); i++ {
 				script.WriteString(lines[i] + "\n")
 			}
 			if i == len(lines) {
 				return nil, errors.New("postrotate script without endscript")
+			}
+			if strings.TrimSpace(lines[i]) != "endscript" {
+				return nil, fmt.Errorf("line %d: %q ends the script, and logrotate reads the rest of the line as directives; put endscript on a line of its own", i+1, strings.TrimSpace(lines[i]))
 			}
 			s.postrotate = script.String()
 		case slices.Contains(logrotateScriptKeywords, kw):

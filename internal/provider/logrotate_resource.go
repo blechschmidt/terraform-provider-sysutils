@@ -135,7 +135,7 @@ func (r *logrotateResource) Schema(_ context.Context, _ resource.SchemaRequest, 
 			"postrotate": schema.StringAttribute{
 				Optional: true,
 				MarkdownDescription: "Shell script to run after rotation, written between `postrotate` and `endscript`, such as `\"systemctl kill -s HUP myapp.service\"`. " +
-					"It is written verbatim, followed by a newline if it does not end with one, and must not contain a line `endscript`.",
+					"It is written verbatim, followed by a newline if it does not end with one, and must not contain a line that starts with `endscript` after blanks, such as `endscript; true`: logrotate ends the script there.",
 				Validators: []validator.String{stringCheck("postrotate script", validateLogrotateScript)},
 			},
 			"extra_directives": schema.ListAttribute{
