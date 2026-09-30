@@ -41,8 +41,9 @@ read -r -a images <<<"${*:-${DISTROS:-debian:stable alpine:latest fedora:latest}
 
 # Skips allowed on every distribution: no systemd as PID 1, no module loading
 # or writable /proc/sys, and no swapon in a container, and the upgrade tests,
-# which need go and git.
-common_skips='systemd is not PID 1|is not in any release yet|CAP_SYS_MODULE is not in the effective capability set|the kernel does not allow setting [^ ]+ here|swapon is not permitted here|SYSUTILS_UPGRADE_FROM_REF is not set'
+# which need go and git. Whether su's PAM session runs pam_limits depends on
+# the distribution (Debian ships it commented out).
+common_skips='the su PAM session does not use pam_limits on this host|systemd is not PID 1|is not in any release yet|CAP_SYS_MODULE is not in the effective capability set|the kernel does not allow setting [^ ]+ here|swapon is not permitted here|SYSUTILS_UPGRADE_FROM_REF is not set'
 
 # allowed_skips IMAGE prints the skip reasons allowed on IMAGE on top of
 # common_skips.

@@ -1106,3 +1106,22 @@ resource "sysutils_file_acl" "test" {
 		),
 	})
 }
+
+func TestAccUpgradeLocal_limits(t *testing.T) {
+	root := t.TempDir()
+	resource.Test(t, resource.TestCase{
+		Steps: localUpgradeSteps(t, "sysutils_limits", fmt.Sprintf(`
+provider "sysutils" {
+  root_dir = %q
+}
+
+resource "sysutils_limits" "test" {
+  domain = "@1000:1999"
+  type   = "-"
+  item   = "nofile"
+  value  = "65536"
+}
+`, root)),
+		CheckDestroy: checkPathGone(filepath.Join(root, "etc", "security", "limits.d", "90-terraform-gid-1000-1999.conf")),
+	})
+}
