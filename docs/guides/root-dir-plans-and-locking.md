@@ -13,7 +13,7 @@ This page covers three provider behaviours that apply to all resources rather th
 - [Plans](#plans-as-a-dry-run-and-drift-report) are the provider's check mode: they show what apply would change, without changing anything.
 - [Locking](#parallel-applies-and-locking) lets Terraform apply many resources that edit the same file at once.
 
-The reference for all three is the [provider page](../index.md).
+The reference for all three is the [provider page](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs).
 
 ## Configuring an image tree with `root_dir`
 
@@ -108,7 +108,7 @@ resource "sysutils_symlink" "localtime" {
 
 **Names are the host's.** `owner` and `group` names are looked up in the build machine's `/etc/passwd` and `/etc/group`, not in the image's, so the example uses numeric IDs.
 
-**Only resources that write files can use `root_dir`.** Resources that change the running system, such as mounts, sysctls, kernel modules, services, packages, SSH keys, firewall rules and alternatives, refuse to plan with `root_dir` set, so that an image configuration never changes the build machine by mistake. Users, groups, systemd units and commands always act on the host. The [provider page](../index.md#root-directory) lists every resource and the exceptions.
+**Only resources that write files can use `root_dir`.** Resources that change the running system, such as mounts, sysctls, kernel modules, services, packages, SSH keys, firewall rules and alternatives, refuse to plan with `root_dir` set, so that an image configuration never changes the build machine by mistake. Users, groups, systemd units and commands always act on the host. The [provider page](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs#root-directory) lists every resource and the exceptions.
 
 ## Plans as a dry run and drift report
 
@@ -185,4 +185,4 @@ Terraform applies up to 10 resources at a time (`-parallelism`). All nine `sysut
 
 You don't need `depends_on` or `-parallelism=1` to order resources that edit the same file. Use `depends_on` only when the order matters for the result, as with firewall rules, which are evaluated in the order they were added.
 
-Programs other than the provider don't take these locks. If an editor or another tool changes a file between the provider reading and writing it, the provider notices before replacing the file, and the apply fails with "file was modified by another process" rather than overwriting the other change. Run apply again. The [provider page](../index.md#concurrency-and-locking) has the details, including how long each lock is waited for.
+Programs other than the provider don't take these locks. If an editor or another tool changes a file between the provider reading and writing it, the provider notices before replacing the file, and the apply fails with "file was modified by another process" rather than overwriting the other change. Run apply again. The [provider page](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs#concurrency-and-locking) has the details, including how long each lock is waited for.

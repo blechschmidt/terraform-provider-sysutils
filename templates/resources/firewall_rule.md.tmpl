@@ -64,7 +64,7 @@ Firewall rules live in the running kernel only. After a reboot, the next plan sh
 
 ## Concurrency
 
-Every create, update and destroy takes the provider's firewall lock (see [Concurrency and Locking](../index.md#concurrency-and-locking)) from before it lists the rules until after it has changed them, so many rules can be applied in parallel, by one or several Terraform runs.
+Every create, update and destroy takes the provider's firewall lock (see [Concurrency and Locking](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs#concurrency-and-locking)) from before it lists the rules until after it has changed them, so many rules can be applied in parallel, by one or several Terraform runs.
 
 ## Import
 

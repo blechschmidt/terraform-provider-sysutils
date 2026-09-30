@@ -35,7 +35,7 @@ The resource owns `LANG` and every `LC_*` variable in the file:
 
 Assignments are read the way a shell reads them: with or without `export`, and with the value in double quotes, single quotes or none. Values are written without quotes; locale names are validated to contain only letters, digits, `_`, `.`, `@`, `+` and `-`, so they never need any.
 
-The file is written atomically, keeping its mode, owner, ACLs and SELinux label, and edits are [serialised](../index.md#concurrency-and-locking) with other resources of the provider. A missing file is created with mode `0644`, together with its directory. A symlink at `path` is refused. Nothing is written if the file already assigns the configured values. With the provider's [`root_dir`](../index.md#root-directory) set, `path` and the detection are inside the root.
+The file is written atomically, keeping its mode, owner, ACLs and SELinux label, and edits are [serialised](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs#concurrency-and-locking) with other resources of the provider. A missing file is created with mode `0644`, together with its directory. A symlink at `path` is refused. Nothing is written if the file already assigns the configured values. With the provider's [`root_dir`](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs#root-directory) set, `path` and the detection are inside the root.
 
 The new locale applies to sessions and services started afterwards. `systemd-localed` notices the change the next time it reads the file; `localectl status` may show the old value until then.
 

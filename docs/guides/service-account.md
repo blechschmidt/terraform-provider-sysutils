@@ -220,4 +220,4 @@ Then run `terraform plan`. It lists every difference between what is on disk and
 
 - Restart or reload the service when its configuration changes with a [`sysutils_exec`](../resources/exec.md) resource whose `triggers` include `sysutils_file.config.content_sha256`.
 - Add the service's host entries or a single setting to a shared file such as `/etc/hosts` with [`sysutils_file_line`](../resources/file_line.md).
-- Read the provider's [security model](../index.md#security-model) before managing paths inside directories that other users can write to.
+- Read the provider's [security model](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs#security-model) before managing paths inside directories that other users can write to.

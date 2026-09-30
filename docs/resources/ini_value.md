@@ -138,7 +138,7 @@ The path ends at the first colon and the key starts after the last one, so the s
 
 ## Caveats
 
-- Consistent with the provider's [security model](../index.md#security-model), a symlink at `path` is refused, and so is anything else that is not a regular file. Symlinks in the parent components of `path` are followed (inside the root if the provider's [`root_dir`](../index.md#root-directory) is set). On destroy, a symlink or other non-regular file at `path` is left untouched, with a warning.
+- Consistent with the provider's [security model](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs#security-model), a symlink at `path` is refused, and so is anything else that is not a regular file. Symlinks in the parent components of `path` are followed (inside the root if the provider's [`root_dir`](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs#root-directory) is set). On destroy, a symlink or other non-regular file at `path` is left untouched, with a warning.
 - The rename gives the file a new inode, which breaks hard links. If `path` is a mount point, the file is rewritten in place, which is not atomic. See [`sysutils_file_line`](./file_line.md#caveats) for details.
 - Preserving an owner other than the user running Terraform requires the privileges to `chown` the replacement file, normally root.
 - Two `sysutils_ini_value` resources for the same key, or a `sysutils_file` managing the same file, conflict with each other.

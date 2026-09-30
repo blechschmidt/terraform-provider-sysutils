@@ -123,7 +123,7 @@ terraform import sysutils_swap.file /swapfile
 
 ## Root Directory
 
-With the provider's [`root_dir`](../index.md#root-directory), `path` is a swap file inside the tree and `/etc/fstab` is the tree's own. This prepares a swap file for an image: the file is created, formatted and added to the tree's `/etc/fstab`. `enabled` must be `false`, because `swapon` would enable swap on the host building the image; block devices are refused for the same reason.
+With the provider's [`root_dir`](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs#root-directory), `path` is a swap file inside the tree and `/etc/fstab` is the tree's own. This prepares a swap file for an image: the file is created, formatted and added to the tree's `/etc/fstab`. `enabled` must be `false`, because `swapon` would enable swap on the host building the image; block devices are refused for the same reason.
 
 ## Caveats
 
@@ -132,4 +132,4 @@ With the provider's [`root_dir`](../index.md#root-directory), `path` is a swap f
 - A new swap file must be in a directory owned by root that other users cannot write to, unless it has the sticky bit set like `/tmp`. `mkswap` and `swapon` follow symlinks, so another user who could replace the file with a symlink could make them overwrite any file.
 - `mkswap`, `swapon` and `swapoff` are each limited to 30 minutes.
 - systemd creates `.swap` units from `/etc/fstab` at boot and on `systemctl daemon-reload`, which the provider does not run. You can run it with [`sysutils_exec`](./exec.md) using `triggers`.
-- The provider [serialises](../index.md#concurrency-and-locking) its own edits of `/etc/fstab`, but does not lock the file against other tools. A concurrent edit by another tool is detected and fails the apply instead of being overwritten.
+- The provider [serialises](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs#concurrency-and-locking) its own edits of `/etc/fstab`, but does not lock the file against other tools. A concurrent edit by another tool is detected and fails the apply instead of being overwritten.

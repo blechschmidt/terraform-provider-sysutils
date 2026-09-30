@@ -129,5 +129,5 @@ If the directory has been deleted, it is removed from state and recreated on the
 - Changing the owner of a file clears its setuid and setgid bits (as `chown` does). With `recursive_mode` the configured `file_mode` is re-applied afterwards; with `recursive_owner` alone, those bits are lost.
 - With recursion enabled, every refresh stats every entry in the tree, and every apply walks it. Keep this in mind for trees with millions of entries.
 - If the directory has been replaced by a file or symlink by the time of destroy, the replacement is left untouched and a warning is emitted.
-- See the provider's [security model](../index.md#security-model).
+- See the provider's [security model](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs#security-model).
 - The resource only works on Unix-like systems.

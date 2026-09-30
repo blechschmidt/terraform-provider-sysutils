@@ -76,7 +76,7 @@ Equivalent spellings are not drift: a mode of `"644"` matches `0644`, a UID matc
 
 ## Caveats
 
-- The target's lock is held only for the rename, not during the download, so a slow download does not block other resources that edit files in the same run. See [Concurrency and Locking](../index.md#concurrency-and-locking).
+- The target's lock is held only for the rename, not during the download, so a slow download does not block other resources that edit files in the same run. See [Concurrency and Locking](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs#concurrency-and-locking).
 - Refresh reads the whole local file to hash it, which takes a moment for files of several gigabytes.
-- `path` is interpreted inside the provider's [`root_dir`](../index.md#root-directory) if one is set; the download itself always uses the network of the host running Terraform.
-- Symlinks in the parent components of `path` are followed. Every ancestor directory must be writable only by trusted users; see the provider's [security model](../index.md#security-model).
+- `path` is interpreted inside the provider's [`root_dir`](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs#root-directory) if one is set; the download itself always uses the network of the host running Terraform.
+- Symlinks in the parent components of `path` are followed. Every ancestor directory must be writable only by trusted users; see the provider's [security model](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs#security-model).

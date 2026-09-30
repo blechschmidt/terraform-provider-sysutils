@@ -137,7 +137,7 @@ Archives are treated as untrusted input. An archive is refused as a whole, durin
 
 or if the archive has more than `max_entries` entries (counting the directories that its entries are in but that it does not list), or its contents are larger than `max_size` bytes. Both the sizes declared in the entry headers and the bytes actually decompressed are counted, so a decompression bomb is stopped early. The whole decompressed tar stream, including headers and padding, is capped as well.
 
-All changes in `destination` go through directory descriptors opened with `O_NOFOLLOW`, component by component. No symlink in `destination` is ever followed, whether an earlier archive created it or someone else planted it. A symlink at a path where the archive has a file or directory is replaced, and only with `overwrite = true` or if this resource extracted it. It is never written through. Symlinks in the path *of* `destination` are followed, as for every resource (see the [security model](../index.md#security-model)).
+All changes in `destination` go through directory descriptors opened with `O_NOFOLLOW`, component by component. No symlink in `destination` is ever followed, whether an earlier archive created it or someone else planted it. A symlink at a path where the archive has a file or directory is replaced, and only with `overwrite = true` or if this resource extracted it. It is never written through. Symlinks in the path *of* `destination` are followed, as for every resource (see the [security model](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs#security-model)).
 
 With the provider's `root_dir`, `destination` is inside the root, resolved like every other managed path. `source` is always a path on the machine running Terraform.
 

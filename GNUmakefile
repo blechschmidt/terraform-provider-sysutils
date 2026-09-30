@@ -91,11 +91,13 @@ docs:
 	go tool tfplugindocs generate --provider-name sysutils
 
 # Fail if docs/ is out of date with the schema, templates or examples, or if
-# the generated docs or example formatting are invalid. Run by CI.
+# the generated docs, their links (see scripts/check-doc-links.sh) or the
+# example formatting are invalid. Run by CI.
 docs-check:
 	terraform fmt -recursive -check -diff examples/
 	go tool tfplugindocs generate --provider-name sysutils
 	go tool tfplugindocs validate --provider-name sysutils
+	scripts/check-doc-links.sh
 	@if [ -n "$$(git status --porcelain -- docs)" ]; then \
 		echo 'docs/ is out of date. Run "make docs" and commit the result:'; \
 		git status --porcelain -- docs; \

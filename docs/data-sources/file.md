@@ -12,7 +12,7 @@ Reads an existing regular file's contents, checksums, size, mode, ownership and 
 
 Unlike the [`sysutils_directory`](./directory.md) data source, a missing file **is** an error, because the contents cannot be null. A directory, FIFO, socket or device at `path` is an error too.
 
-A symlink at `path` is refused unless `follow_symlinks = true` is set. This matches the [security model](../index.md#security-model) of the resources: reading through a symlink that another user can plant or redirect (for example in `/tmp`) could expose the contents of a file that user cannot read into Terraform state and outputs.
+A symlink at `path` is refused unless `follow_symlinks = true` is set. This matches the [security model](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs#security-model) of the resources: reading through a symlink that another user can plant or redirect (for example in `/tmp`) could expose the contents of a file that user cannot read into Terraform state and outputs.
 
 The data source is read during planning, so it sees the filesystem as it is before the apply. Files that resources in the same configuration will create are not visible until the next run.
 

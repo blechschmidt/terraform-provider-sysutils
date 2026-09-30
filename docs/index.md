@@ -11,47 +11,47 @@ The `sysutils` provider exposes a small set of primitives for host-level adminis
 
 | Resource | Purpose |
 |----------|---------|
-| [`sysutils_file`](./resources/file.md) | Write a file from text, base64 or a local source file, with mode and ownership; exposes content checksums. |
-| [`sysutils_remote_file`](./resources/remote_file.md) | Download an `http` or `https` URL to a file, like Ansible's `get_url`, verifying its size and checksum before it is renamed into place. |
-| [`sysutils_file_line`](./resources/file_line.md) | Manage one line or a marker-delimited block inside an existing file, leaving the rest of the file alone. |
-| [`sysutils_ini_value`](./resources/ini_value.md) | Set or remove one key in a section of an INI-style file, keeping comments and all other content. |
-| [`sysutils_hosts_entry`](./resources/hosts_entry.md) | Map an IP address to hostnames with one line of `/etc/hosts`, keeping every other line. |
-| [`sysutils_template_file`](./resources/template_file.md) | Render a Go or Terraform-syntax template with variables into a file, checking the template at plan time. |
-| [`sysutils_directory`](./resources/directory.md) | Manage a directory with given mode and ownership. |
-| [`sysutils_symlink`](./resources/symlink.md) | Manage a symbolic link, switching its target atomically. |
-| [`sysutils_file_acl`](./resources/file_acl.md) | Grant users and groups access to an existing file or directory with a POSIX ACL, and set a directory's default ACL, like `setfacl`, without needing `setfacl`. |
-| [`sysutils_file_attributes`](./resources/file_attributes.md) | Set inode flags such as immutable (`i`), append only (`a`) or no dump (`d`) on an existing file or directory, like `chattr`, without needing `chattr`. |
-| [`sysutils_archive_extract`](./resources/archive_extract.md) | Extract a local tar, tar.gz, tar.xz or zip archive into a directory, refusing entries that would escape it, and remove exactly the extracted files on destroy. |
-| [`sysutils_user`](./resources/user.md) | Create, update, and delete local users via `useradd`/`usermod`/`userdel`. |
-| [`sysutils_group`](./resources/group.md) | Create, update, and delete local groups and their member lists via `groupadd`/`groupmod`/`gpasswd`/`groupdel`. |
-| [`sysutils_systemd_unit`](./resources/systemd_unit.md) | Manage a systemd unit file, whether the unit is enabled, and whether it is running. |
-| [`sysutils_service`](./resources/service.md) | Enable, start, stop and restart an existing service with systemd or OpenRC. |
-| [`sysutils_mount`](./resources/mount.md) | Mount a file system and manage its `/etc/fstab` entry, keeping the rest of the file intact. |
-| [`sysutils_swap`](./resources/swap.md) | Create, format and enable a swap file, or use a swap partition, and manage its `/etc/fstab` entry. |
-| [`sysutils_sysctl`](./resources/sysctl.md) | Set a kernel parameter through `/proc/sys` and persist it in a `sysctl.d` file. |
-| [`sysutils_kernel_module`](./resources/kernel_module.md) | Load a kernel module with `modprobe` and have it loaded at boot, with its parameters. |
-| [`sysutils_timezone`](./resources/timezone.md) | Set the system time zone through `/etc/localtime` and `/etc/timezone`, or `timedatectl`. |
-| [`sysutils_hostname`](./resources/hostname.md) | Set the static, kernel and pretty hostname and keep a matching `127.0.1.1` line in `/etc/hosts`, with `hostnamectl` where systemd runs. |
-| [`sysutils_locale`](./resources/locale.md) | Set the system locale in `/etc/locale.conf` or `/etc/default/locale`, compiling missing locales. |
-| [`sysutils_ssh_authorized_key`](./resources/ssh_authorized_key.md) | Add a public key, with options and comment, to a user's `~/.ssh/authorized_keys`, without following symlinks the user may have planted. |
-| [`sysutils_cron_job`](./resources/cron_job.md) | Schedule a command with a file of its own in `/etc/cron.d`, owned by root with mode `0644`. |
-| [`sysutils_sudoers`](./resources/sudoers.md) | Grant sudo rights with a drop-in file in `/etc/sudoers.d`, from verbatim content or structured rules, checked with `visudo -cf` before it is installed. |
-| [`sysutils_limits`](./resources/limits.md) | Set a `pam_limits` resource limit, such as open files or processes for a user or group, with an entry in a drop-in file in `/etc/security/limits.d`, keeping the file's other lines. |
-| [`sysutils_firewall_rule`](./resources/firewall_rule.md) | Add one firewall rule with nftables, in a table of its own, or iptables, tagged so that rules of other tools are never touched. |
-| [`sysutils_package`](./resources/package.md) | Install, upgrade, pin to a version or remove an OS package with `apt`, `dnf`, `yum` or `apk`. |
-| [`sysutils_package_repository`](./resources/package_repository.md) | Add an apt, dnf, yum or apk repository and its signing key, and refresh the package index. |
-| [`sysutils_alternatives`](./resources/alternatives.md) | Select which program a link group such as `editor` or `java` points to with `update-alternatives` or `alternatives`, registering it first if needed. |
-| [`sysutils_exec`](./resources/exec.md) | Run a command with a chosen environment, capturing exit code, stdout, and stderr. |
+| [`sysutils_file`](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs/resources/file) | Write a file from text, base64 or a local source file, with mode and ownership; exposes content checksums. |
+| [`sysutils_remote_file`](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs/resources/remote_file) | Download an `http` or `https` URL to a file, like Ansible's `get_url`, verifying its size and checksum before it is renamed into place. |
+| [`sysutils_file_line`](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs/resources/file_line) | Manage one line or a marker-delimited block inside an existing file, leaving the rest of the file alone. |
+| [`sysutils_ini_value`](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs/resources/ini_value) | Set or remove one key in a section of an INI-style file, keeping comments and all other content. |
+| [`sysutils_hosts_entry`](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs/resources/hosts_entry) | Map an IP address to hostnames with one line of `/etc/hosts`, keeping every other line. |
+| [`sysutils_template_file`](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs/resources/template_file) | Render a Go or Terraform-syntax template with variables into a file, checking the template at plan time. |
+| [`sysutils_directory`](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs/resources/directory) | Manage a directory with given mode and ownership. |
+| [`sysutils_symlink`](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs/resources/symlink) | Manage a symbolic link, switching its target atomically. |
+| [`sysutils_file_acl`](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs/resources/file_acl) | Grant users and groups access to an existing file or directory with a POSIX ACL, and set a directory's default ACL, like `setfacl`, without needing `setfacl`. |
+| [`sysutils_file_attributes`](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs/resources/file_attributes) | Set inode flags such as immutable (`i`), append only (`a`) or no dump (`d`) on an existing file or directory, like `chattr`, without needing `chattr`. |
+| [`sysutils_archive_extract`](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs/resources/archive_extract) | Extract a local tar, tar.gz, tar.xz or zip archive into a directory, refusing entries that would escape it, and remove exactly the extracted files on destroy. |
+| [`sysutils_user`](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs/resources/user) | Create, update, and delete local users via `useradd`/`usermod`/`userdel`. |
+| [`sysutils_group`](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs/resources/group) | Create, update, and delete local groups and their member lists via `groupadd`/`groupmod`/`gpasswd`/`groupdel`. |
+| [`sysutils_systemd_unit`](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs/resources/systemd_unit) | Manage a systemd unit file, whether the unit is enabled, and whether it is running. |
+| [`sysutils_service`](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs/resources/service) | Enable, start, stop and restart an existing service with systemd or OpenRC. |
+| [`sysutils_mount`](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs/resources/mount) | Mount a file system and manage its `/etc/fstab` entry, keeping the rest of the file intact. |
+| [`sysutils_swap`](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs/resources/swap) | Create, format and enable a swap file, or use a swap partition, and manage its `/etc/fstab` entry. |
+| [`sysutils_sysctl`](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs/resources/sysctl) | Set a kernel parameter through `/proc/sys` and persist it in a `sysctl.d` file. |
+| [`sysutils_kernel_module`](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs/resources/kernel_module) | Load a kernel module with `modprobe` and have it loaded at boot, with its parameters. |
+| [`sysutils_timezone`](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs/resources/timezone) | Set the system time zone through `/etc/localtime` and `/etc/timezone`, or `timedatectl`. |
+| [`sysutils_hostname`](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs/resources/hostname) | Set the static, kernel and pretty hostname and keep a matching `127.0.1.1` line in `/etc/hosts`, with `hostnamectl` where systemd runs. |
+| [`sysutils_locale`](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs/resources/locale) | Set the system locale in `/etc/locale.conf` or `/etc/default/locale`, compiling missing locales. |
+| [`sysutils_ssh_authorized_key`](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs/resources/ssh_authorized_key) | Add a public key, with options and comment, to a user's `~/.ssh/authorized_keys`, without following symlinks the user may have planted. |
+| [`sysutils_cron_job`](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs/resources/cron_job) | Schedule a command with a file of its own in `/etc/cron.d`, owned by root with mode `0644`. |
+| [`sysutils_sudoers`](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs/resources/sudoers) | Grant sudo rights with a drop-in file in `/etc/sudoers.d`, from verbatim content or structured rules, checked with `visudo -cf` before it is installed. |
+| [`sysutils_limits`](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs/resources/limits) | Set a `pam_limits` resource limit, such as open files or processes for a user or group, with an entry in a drop-in file in `/etc/security/limits.d`, keeping the file's other lines. |
+| [`sysutils_firewall_rule`](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs/resources/firewall_rule) | Add one firewall rule with nftables, in a table of its own, or iptables, tagged so that rules of other tools are never touched. |
+| [`sysutils_package`](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs/resources/package) | Install, upgrade, pin to a version or remove an OS package with `apt`, `dnf`, `yum` or `apk`. |
+| [`sysutils_package_repository`](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs/resources/package_repository) | Add an apt, dnf, yum or apk repository and its signing key, and refresh the package index. |
+| [`sysutils_alternatives`](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs/resources/alternatives) | Select which program a link group such as `editor` or `java` points to with `update-alternatives` or `alternatives`, registering it first if needed. |
+| [`sysutils_exec`](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs/resources/exec) | Run a command with a chosen environment, capturing exit code, stdout, and stderr. |
 
 | Data Source | Purpose |
 |-------------|---------|
-| [`sysutils_directory`](./data-sources/directory.md) | Read a directory's existence, mode, ownership, and entries. |
-| [`sysutils_file`](./data-sources/file.md) | Read an existing file's contents, checksums, mode, ownership, and modification time. |
-| [`sysutils_user`](./data-sources/user.md) | Look up an existing user by name or uid. |
-| [`sysutils_group`](./data-sources/group.md) | Look up an existing group by name or gid. |
-| [`sysutils_host`](./data-sources/host.md) | Read host facts for conditionals: hostname, distribution, kernel, CPUs, memory, init system, package manager and firewall backend. |
-| [`sysutils_package`](./data-sources/package.md) | Read whether an OS package is installed, its version and architecture, and the version the package index offers. |
-| [`sysutils_service`](./data-sources/service.md) | Read whether a service exists, starts at boot and is running. |
+| [`sysutils_directory`](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs/data-sources/directory) | Read a directory's existence, mode, ownership, and entries. |
+| [`sysutils_file`](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs/data-sources/file) | Read an existing file's contents, checksums, mode, ownership, and modification time. |
+| [`sysutils_user`](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs/data-sources/user) | Look up an existing user by name or uid. |
+| [`sysutils_group`](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs/data-sources/group) | Look up an existing group by name or gid. |
+| [`sysutils_host`](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs/data-sources/host) | Read host facts for conditionals: hostname, distribution, kernel, CPUs, memory, init system, package manager and firewall backend. |
+| [`sysutils_package`](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs/data-sources/package) | Read whether an OS package is installed, its version and architecture, and the version the package index offers. |
+| [`sysutils_service`](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs/data-sources/service) | Read whether a service exists, starts at boot and is running. |
 
 It is intended for small bootstrapping tasks where installing and configuring something like Ansible or a full configuration-management system would be overkill.
 
@@ -61,12 +61,12 @@ The guides show how the resources work together on common jobs, and explain the 
 
 | Guide | Resources |
 |-------|-----------|
-| [Bootstrapping a host](./guides/bootstrap-host.md): base packages and services, administrator accounts, SSH keys and sudo | `sysutils_package`, `sysutils_service`, `sysutils_group`, `sysutils_user`, `sysutils_ssh_authorized_key`, `sysutils_file` |
-| [Hardening a host](./guides/hardening.md): kernel parameters, disabled modules, SSH settings, file modes and a permission audit | `sysutils_sysctl`, `sysutils_kernel_module`, `sysutils_file`, `sysutils_directory`, `sysutils_service` |
-| [Deploying an application](./guides/app-deployment.md): versioned releases, a templated configuration, a systemd unit and restarts on change | `sysutils_archive_extract`, `sysutils_symlink`, `sysutils_template_file`, `sysutils_systemd_unit`, `sysutils_service` |
-| [Installing a release from a URL](./guides/remote-release.md): download a release tarball, verify its checksum and unpack it | `sysutils_remote_file`, `sysutils_archive_extract`, `sysutils_symlink`, `sysutils_directory` |
-| [Image trees, dry runs and parallel applies](./guides/root-dir-plans-and-locking.md): `root_dir`, plans as check mode and drift report, and locking | provider `root_dir`, `sysutils_hosts_entry`, `sysutils_package` |
-| [Provisioning a service account and its files](./guides/service-account.md): ownership and modes of a service's directories, and importing an existing installation | `sysutils_group`, `sysutils_user`, `sysutils_directory`, `sysutils_file`, `sysutils_symlink` |
+| [Bootstrapping a host](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs/guides/bootstrap-host): base packages and services, administrator accounts, SSH keys and sudo | `sysutils_package`, `sysutils_service`, `sysutils_group`, `sysutils_user`, `sysutils_ssh_authorized_key`, `sysutils_file` |
+| [Hardening a host](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs/guides/hardening): kernel parameters, disabled modules, SSH settings, file modes and a permission audit | `sysutils_sysctl`, `sysutils_kernel_module`, `sysutils_file`, `sysutils_directory`, `sysutils_service` |
+| [Deploying an application](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs/guides/app-deployment): versioned releases, a templated configuration, a systemd unit and restarts on change | `sysutils_archive_extract`, `sysutils_symlink`, `sysutils_template_file`, `sysutils_systemd_unit`, `sysutils_service` |
+| [Installing a release from a URL](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs/guides/remote-release): download a release tarball, verify its checksum and unpack it | `sysutils_remote_file`, `sysutils_archive_extract`, `sysutils_symlink`, `sysutils_directory` |
+| [Image trees, dry runs and parallel applies](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs/guides/root-dir-plans-and-locking): `root_dir`, plans as check mode and drift report, and locking | provider `root_dir`, `sysutils_hosts_entry`, `sysutils_package` |
+| [Provisioning a service account and its files](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs/guides/service-account): ownership and modes of a service's directories, and importing an existing installation | `sysutils_group`, `sysutils_user`, `sysutils_directory`, `sysutils_file`, `sysutils_symlink` |
 
 ## Example Usage
 
@@ -102,11 +102,11 @@ The provider usually runs as root and acts on paths that other local users may b
 - **Ownership is applied before mode, and both are applied before new file content is written.** `chown` clears the setuid/setgid bits, so doing it first keeps modes such as `"4755"` intact. New content is never visible under the previous, possibly looser, mode.
 - **In-place edits are atomic and detect concurrent changes.** `sysutils_file_line`, `sysutils_ini_value` and `sysutils_hosts_entry` write the edited file to a temporary file in the same directory, give it the original file's owner, group, mode, ACLs and other extended attributes, and rename it over the original. Just before the rename they check that the original was not modified, replaced or given new permissions since it was read, and abort otherwise.
 - **Special files are refused.** A FIFO, socket or device at a file's `path` is reported as "not a regular file", so it never causes the provider to hang or to read from or write to it.
-- **Immutable and append-only files are left alone.** A file or directory with the immutable (`i`) or append-only (`a`) inode flag can't be modified, replaced or removed, not even by root, so the resources that write files fail on it. When a write, `chmod`, `chown`, rename or removal is refused with "operation not permitted" and the file or its directory has one of these flags, the error names the flag and the path. The provider never clears the flags itself; manage them with [`sysutils_file_attributes`](./resources/file_attributes.md) or `chattr`.
+- **Immutable and append-only files are left alone.** A file or directory with the immutable (`i`) or append-only (`a`) inode flag can't be modified, replaced or removed, not even by root, so the resources that write files fail on it. When a write, `chmod`, `chown`, rename or removal is refused with "operation not permitted" and the file or its directory has one of these flags, the error names the flag and the path. The provider never clears the flags itself; manage them with [`sysutils_file_attributes`](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs/resources/file_attributes) or `chattr`.
 - **Destroy removes only what the resource created.** It uses `unlink`/`rmdir`, which never follow symlinks. If something else has taken the managed path's place, destroy leaves it alone and emits a warning.
 - **Recursive deletion (`force_destroy`) is held to a stricter standard.** No component of the path may be a symlink, and the directory is deleted relative to open directory descriptors, so a component swapped out mid-way cannot redirect it. Deletion never crosses into another mounted filesystem. `/`, empty paths and a fixed list of critical system directories (such as `/etc`, `/usr`, `/var/lib` and `/home`) are refused, and the check runs at plan time.
 - **Intermediate path components are resolved normally** for all other operations, so paths below system symlinks such as `/var/run` keep working. Every ancestor directory of a managed path must be writable only by trusted users. Otherwise a local user could redirect where a file or directory is created. With [`root_dir`](#root-directory) set, the provider resolves every component itself and never leaves the root.
-- **Error messages contain only the configured path and the operating-system error.** File content never appears in diagnostics. Note that file content is stored in Terraform state; see the [`sysutils_file`](./resources/file.md) caveats.
+- **Error messages contain only the configured path and the operating-system error.** File content never appears in diagnostics. Note that file content is stored in Terraform state; see the [`sysutils_file`](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs/resources/file) caveats.
 
 ## Root Directory
 

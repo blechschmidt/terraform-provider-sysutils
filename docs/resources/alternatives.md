@@ -78,7 +78,7 @@ Changing `name` replaces the resource. Changing `path` selects the new alternati
 
 ### Locking
 
-The tools rewrite the link group's administrative file (`/var/lib/dpkg/alternatives/<name>` or `/var/lib/alternatives/<name>`) and its symlinks without locking, and package scripts run them during installs. All commands of this resource therefore hold the provider's package-manager lock, which also serialises `sysutils_package` and `sysutils_package_repository`, so that they never overlap with a package install by the provider or with each other. See [Concurrency and Locking](../index.md#concurrency-and-locking).
+The tools rewrite the link group's administrative file (`/var/lib/dpkg/alternatives/<name>` or `/var/lib/alternatives/<name>`) and its symlinks without locking, and package scripts run them during installs. All commands of this resource therefore hold the provider's package-manager lock, which also serialises `sysutils_package` and `sysutils_package_repository`, so that they never overlap with a package install by the provider or with each other. See [Concurrency and Locking](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs#concurrency-and-locking).
 
 ## Validation
 

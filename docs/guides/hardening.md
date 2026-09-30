@@ -63,7 +63,7 @@ resource "sysutils_sysctl" "hardening" {
 }
 ```
 
-Each `sysutils_sysctl` writes the value to `/proc/sys` right away and adds a `name = value` line to `file`, so that it also holds after a reboot. Parameters from one baseline belong in one file of their own. You can then see what the baseline changed by reading one file, and a `99-` file from a package or an administrator can still override it. The resources share the file, and the provider [locks it](../index.md#concurrency-and-locking) for every edit, so Terraform can apply all eleven in parallel without losing a line.
+Each `sysutils_sysctl` writes the value to `/proc/sys` right away and adds a `name = value` line to `file`, so that it also holds after a reboot. Parameters from one baseline belong in one file of their own. You can then see what the baseline changed by reading one file, and a `99-` file from a package or an administrator can still override it. The resources share the file, and the provider [locks it](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs#concurrency-and-locking) for every edit, so Terraform can apply all eleven in parallel without losing a line.
 
 A plan reports a parameter changed at runtime (`sysctl -w`) or a line edited in the file, and apply restores both. Destroying a resource removes its line, but it doesn't reset the running kernel's value. That happens at the next reboot.
 
@@ -192,7 +192,7 @@ check "root_only_writable" {
 }
 ```
 
-**Modes are part of the resource.** `sysutils_file` and `sysutils_directory` apply `owner`, `group` and `mode` when they create the file, check them on every refresh, and restore them on the next apply if someone changed them. Ownership is set before the mode, and both before any content is written. A secret is therefore never visible, even briefly, under a looser mode. See the [security model](../index.md#security-model).
+**Modes are part of the resource.** `sysutils_file` and `sysutils_directory` apply `owner`, `group` and `mode` when they create the file, check them on every refresh, and restore them on the next apply if someone changed them. Ownership is set before the mode, and both before any content is written. A secret is therefore never visible, even briefly, under a looser mode. See the [security model](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs#security-model).
 
 **Restart on change.** `restart_on_change` restarts `sshd` whenever the drop-in file's checksum changes, so the new settings take effect in the same apply. Established SSH sessions survive a restart of `sshd`. If you also use the [bootstrapping recipe](./bootstrap-host.md), manage the SSH service with only one `sysutils_service` resource: merge `restart_on_change` into the one that sets `enabled`, rather than having two resources for the same service.
 

@@ -203,7 +203,7 @@ Building requires Go (see `go.mod` for the version). Acceptance tests and doc ge
 | `make lint` | Run `golangci-lint`. |
 | `make coverage` | Write a test-coverage report to `coverage.html`. |
 | `make docs` | Format the examples and regenerate `docs/`. |
-| `make docs-check` | Fail if `docs/` is out of date or the examples aren't formatted. Run in CI. |
+| `make docs-check` | Fail if `docs/` is out of date, the examples aren't formatted, or a link in `docs/` would break on the Terraform Registry (`scripts/check-doc-links.sh`). Run in CI. |
 | `make examples-check` | Run `terraform validate` on every example directory with the provider built from the checkout, and check that all HCL in the docs and in this README comes from `examples/`. Needs neither root nor network access. Run in CI. |
 
 ### Acceptance tests

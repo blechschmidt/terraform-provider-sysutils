@@ -2,6 +2,14 @@
 
 All notable changes to this provider are listed here. Versions follow [semantic versioning](https://semver.org/). The resource and data source pages under [`docs/`](./docs) describe each feature in full.
 
+## 1.2.1 (2026-09-30)
+
+Documentation fix only; the provider's code and schemas are unchanged from v1.2.0, so upgrading needs no changes to configuration or state.
+
+### Bug fixes
+
+- Links on the Terraform Registry documentation pages work again. The registry resolves a relative link against the page's URL, so the links to resources, data sources and guides on the provider's overview page (such as `./resources/directory.md`) led to 404 pages like `https://registry.terraform.io/providers/blechschmidt/sysutils/latest/resources/directory`. Links to a section of the overview page (such as `../index.md#security-model`) opened the overview without jumping to the section. These now use absolute Registry URLs. `make docs-check` runs the new `scripts/check-doc-links.sh`, which fails on links of either kind and on relative links to pages that don't exist.
+
 ## 1.2.0 (2026-09-30)
 
 Four new resources and four new data sources, all new since v1.1.0. The resources and data sources of v1.1.0 are unchanged apart from clearer errors for files with the immutable or append-only flag (see Improvements).

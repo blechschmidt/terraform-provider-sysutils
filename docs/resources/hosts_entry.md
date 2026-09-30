@@ -89,7 +89,7 @@ Names are compared ignoring case. Only addresses of the same family conflict: a 
 - Line endings are kept: in a file with CRLF line endings (judged by its first line), the new line ends with CRLF too. A file without a line break at the end gets one when a line is appended.
 - Changes are written atomically, exactly as by [`sysutils_file_line`](./file_line.md#writing-the-file): the replacement gets the original file's owner, group, mode, ACLs and SELinux label before it is renamed into place, and the edit fails without writing if the file was changed by someone else in the meantime. Several resources editing the same file, including `sysutils_file_line` and `sysutils_ini_value`, are serialised by the provider, so they can be applied in parallel safely.
 - A missing file is created with mode `0644`, owned by the user running Terraform. Its directory must exist.
-- With the provider's [`root_dir`](../index.md#root-directory) set, `path` is inside the root: `/etc/hosts` means `<root_dir>/etc/hosts`, which is how an image's hosts file is prepared. `path` and `id` keep the path inside the root.
+- With the provider's [`root_dir`](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs#root-directory) set, `path` is inside the root: `/etc/hosts` means `<root_dir>/etc/hosts`, which is how an image's hosts file is prepared. `path` and `id` keep the path inside the root.
 - Files larger than 64 MiB are refused.
 
 ## Drift Detection
@@ -115,7 +115,7 @@ If several lines map the address, the first one is imported, with a warning. To 
 
 ## Caveats
 
-- Consistent with the provider's [security model](../index.md#security-model), a symlink at `path` is refused, and so is anything else that is not a regular file. Symlinks in the parent components of `path` are followed (inside the root if `root_dir` is set). On destroy, a symlink or other non-regular file at `path` is left untouched, with a warning.
+- Consistent with the provider's [security model](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs#security-model), a symlink at `path` is refused, and so is anything else that is not a regular file. Symlinks in the parent components of `path` are followed (inside the root if `root_dir` is set). On destroy, a symlink or other non-regular file at `path` is left untouched, with a warning.
 - The rename gives the file a new inode, which breaks hard links. If `path` is a mount point, as `/etc/hosts` is in Docker containers, the file is rewritten in place, which is not atomic. See [`sysutils_file_line`](./file_line.md#caveats) for details.
 - Preserving an owner other than the user running Terraform requires the privileges to `chown` the replacement file, normally root.
 - Addresses with a zone, such as `fe80::1%eth0`, and hostnames that are not valid under RFC 1123 (with underscores, a trailing dot or non-ASCII letters) are refused. Such lines already in the file are kept but can't be managed.
