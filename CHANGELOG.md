@@ -2,7 +2,7 @@
 
 All notable changes to this provider are listed here. Versions follow [semantic versioning](https://semver.org/). The resource and data source pages under [`docs/`](./docs) describe each feature in full.
 
-## 1.1.0 (Unreleased)
+## 1.1.0 (2026-09-30)
 
 Everything below is new since v1.0.1, which shipped only `sysutils_file`, `sysutils_user` and `sysutils_exec`.
 
