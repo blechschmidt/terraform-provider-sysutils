@@ -148,16 +148,14 @@ func localtimeLinkTarget(name string) string { return "../usr/share/zoneinfo/" +
 
 // readZoneinfo reads the zone file of name below root and checks that it is
 // a compiled zone file. Symlinks in the zoneinfo tree, such as
-// "UTC -> Etc/UTC", are followed inside the root.
+// "UTC -> Etc/UTC", are followed inside the root as long as they stay in
+// the zoneinfo directory (see resolveZoneFile).
 func readZoneinfo(root *fsRoot, name string) ([]byte, error) {
 	if err := validateTimezoneName(name); err != nil {
 		return nil, err
 	}
 	display := zoneinfoFile(name)
-	host, err := root.resolveFollow(display)
-	if err == nil && root.isHost() {
-		host, err = filepath.EvalSymlinks(host)
-	}
+	host, err := resolveZoneFile(root, name)
 	if errors.Is(err, fs.ErrNotExist) {
 		return nil, fmt.Errorf("unknown time zone %q: %s does not exist; is tzdata installed?", name, display)
 	}
@@ -175,6 +173,65 @@ func readZoneinfo(root *fsRoot, name string) ([]byte, error) {
 		return nil, fmt.Errorf("unknown time zone %q: %s is not a compiled zone file", name, display)
 	}
 	return data, nil
+}
+
+// maxZoneinfoLinks bounds the symlinks followed to find a zone file, as
+// the kernel's limit of 40 does.
+const maxZoneinfoLinks = 40
+
+// resolveZoneFile returns the host path of the zone file of name below
+// root. Symlinks are followed, inside the root, but only while they stay in
+// the zoneinfo directory: Debian's tzdata has "localtime -> /etc/localtime",
+// and an /etc/localtime that pointed to that zone would point to itself. A
+// zone whose file is reached only through a symlink out of the zoneinfo
+// directory is therefore refused, even if the file it leads to is a zone
+// file.
+func resolveZoneFile(root *fsRoot, name string) (string, error) {
+	follow := func(p string) (string, error) {
+		host, err := root.resolveFollow(p)
+		if err == nil && root.isHost() {
+			host, err = filepath.EvalSymlinks(host)
+		}
+		return host, err
+	}
+	zdir, err := follow(zoneinfoDir)
+	if err != nil {
+		return "", err
+	}
+	p := zoneinfoFile(name)
+	for range maxZoneinfoLinks {
+		dir, base := path.Split(p)
+		hdir, err := follow(path.Clean(dir))
+		if err != nil {
+			return "", err
+		}
+		rel, err := filepath.Rel(zdir, hdir)
+		if err != nil || rel == ".." || strings.HasPrefix(rel, "../") || base == "" {
+			return "", fmt.Errorf("%s leads out of %s to %s", zoneinfoFile(name), zoneinfoDir, p)
+		}
+		host := filepath.Join(hdir, base)
+		info, err := os.Lstat(host)
+		if err != nil {
+			return "", err
+		}
+		if info.Mode()&fs.ModeSymlink == 0 {
+			return host, nil
+		}
+		target, err := os.Readlink(host)
+		if err != nil {
+			return "", err
+		}
+		link := path.Join(zoneinfoDir, filepath.ToSlash(rel), base)
+		if err := root.checkSymlinkTargetInRoot(link, target); err != nil {
+			return "", err
+		}
+		if path.IsAbs(target) {
+			p = path.Clean(target)
+		} else {
+			p = path.Join(path.Dir(link), target)
+		}
+	}
+	return "", fmt.Errorf("%s: too many levels of symbolic links", zoneinfoFile(name))
 }
 
 // zoneFromLinkTarget returns the zone name that an /etc/localtime symlink

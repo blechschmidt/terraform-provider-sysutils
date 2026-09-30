@@ -359,3 +359,49 @@ func TestTimezoneSetWithTimedatectl(t *testing.T) {
 		t.Errorf("error = %v, want timedatectl's message", err)
 	}
 }
+
+// Debian's and Ubuntu's tzdata ship "localtime -> /etc/localtime". Accepting
+// it as a zone made /etc/localtime a symlink to itself, by way of the
+// zoneinfo directory, which leaves the system without a time zone.
+func TestSetTimezone_refusesZoneLinkingOutOfZoneinfo(t *testing.T) {
+	ctx := context.Background()
+	root := testTimezoneRoot(t, "/etc/debian_version")
+	mustSymlink(t, "/etc/localtime", filepath.Join(root, zoneinfoDir, "localtime"))
+	// Through a symlinked directory as well.
+	mustSymlink(t, "/etc", filepath.Join(root, zoneinfoDir, "Sneaky"))
+	mustSymlink(t, "../usr/share/zoneinfo/Europe/Berlin", filepath.Join(root, "etc", "localtime"))
+	r, err := newFSRoot(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"localtime", "Sneaky/localtime"} {
+		if _, err := setTimezone(ctx, nil, r, name); err == nil || !strings.Contains(err.Error(), "leads out of") {
+			t.Errorf("setTimezone(%q) = %v, want an error about leaving the zoneinfo directory", name, err)
+		}
+		if got := readLinkOrFail(t, filepath.Join(root, "etc", "localtime")); got != "../usr/share/zoneinfo/Europe/Berlin" {
+			t.Errorf("after setTimezone(%q), /etc/localtime -> %q, want it unchanged", name, got)
+		}
+	}
+	// A regular /etc/localtime with /etc/timezone naming "localtime" is not
+	// taken for that zone, which is always a copy of itself.
+	if err := os.Remove(filepath.Join(root, "etc", "localtime")); err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, filepath.Join(root, "etc", "localtime"), fakeTZif("Europe/Berlin"))
+	mustWrite(t, filepath.Join(root, "etc", "timezone"), "localtime\n")
+	snap, err := readTimezoneSnapshot(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if zone, ok := snap.zone(r, ""); zone != "" || ok {
+		t.Errorf("zone() = %q, %v; want no zone", zone, ok)
+	}
+	// Links that stay in the zoneinfo directory still work, also through
+	// a symlinked directory in it.
+	mustSymlink(t, ".", filepath.Join(root, zoneinfoDir, "posix"))
+	for _, name := range []string{"UTC", "posix/Europe/Berlin"} {
+		if _, err := setTimezone(ctx, nil, r, name); err != nil {
+			t.Errorf("setTimezone(%q) = %v", name, err)
+		}
+	}
+}
