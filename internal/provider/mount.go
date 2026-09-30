@@ -325,9 +325,15 @@ func fstabMountPointMatches(field, mountPoint string) bool {
 
 // findFstabEntries returns the indexes of the entries for mountPoint.
 func findFstabEntries(lines []string, mountPoint string) []int {
+	return findFstabEntriesFunc(lines, func(e fstabEntry) bool { return fstabMountPointMatches(e.mountPoint, mountPoint) })
+}
+
+// findFstabEntriesFunc returns the indexes of the entries for which match
+// returns true.
+func findFstabEntriesFunc(lines []string, match func(fstabEntry) bool) []int {
 	var idx []int
 	for i, l := range lines {
-		if e, ok := parseFstabLine(l); ok && fstabMountPointMatches(e.mountPoint, mountPoint) {
+		if e, ok := parseFstabLine(l); ok && match(e) {
 			idx = append(idx, i)
 		}
 	}
@@ -351,7 +357,12 @@ func lookupFstabEntry(t *textFile, mountPoint string) (*fstabEntry, int) {
 // appended. Comments and all other lines are kept. It reports whether t
 // changed.
 func setFstabEntry(t *textFile, e fstabEntry) bool {
-	idx := findFstabEntries(t.lines, e.mountPoint)
+	return setFstabEntryFunc(t, e, func(o fstabEntry) bool { return fstabMountPointMatches(o.mountPoint, e.mountPoint) })
+}
+
+// setFstabEntryFunc is setFstabEntry for the entries that match selects.
+func setFstabEntryFunc(t *textFile, e fstabEntry, match func(fstabEntry) bool) bool {
+	idx := findFstabEntriesFunc(t.lines, match)
 	if len(idx) == 0 {
 		t.insert(len(t.lines), []string{e.String()})
 		return true
@@ -373,7 +384,13 @@ func setFstabEntry(t *textFile, e fstabEntry) bool {
 // removeFstabEntries removes every entry for mountPoint and reports whether
 // t changed.
 func removeFstabEntries(t *textFile, mountPoint string) bool {
-	idx := findFstabEntries(t.lines, mountPoint)
+	return removeFstabEntriesFunc(t, func(e fstabEntry) bool { return fstabMountPointMatches(e.mountPoint, mountPoint) })
+}
+
+// removeFstabEntriesFunc removes every entry for which match returns true
+// and reports whether t changed.
+func removeFstabEntriesFunc(t *textFile, match func(fstabEntry) bool) bool {
+	idx := findFstabEntriesFunc(t.lines, match)
 	for i := len(idx) - 1; i >= 0; i-- {
 		t.replace(idx[i], idx[i]+1, nil)
 	}
