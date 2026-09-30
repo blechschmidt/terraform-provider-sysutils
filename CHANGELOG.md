@@ -15,6 +15,11 @@ All notable changes to this provider are listed here. Versions follow [semantic 
 - [`sysutils_service`](./docs/data-sources/service.md) reads whether a service `exists`, is `enabled` and is `running`, its primary `unit` name and the init system's own `enabled_state` and `active_state`, with the systemd and OpenRC backends of the `sysutils_service` resource. It needs no root. Where neither systemd nor OpenRC runs, as in most containers or with SysV init, it still succeeds: `init_system` reports what runs (`sysvinit` or null), `supported` is false and the service attributes are null.
 - Both refuse to read when the provider's `root_dir` is set, since they describe the running host.
 
+### Fixes from the security review of the new resources and data sources
+
+- `sysutils_limits` now reads limits files the way `pam_limits` does. `pam_limits` lowercases the type, item and value of an entry, so `postgres SOFT NOFILE 999999` is the same entry as `postgres soft nofile 1024`. The provider compared them case-sensitively: an upper-case entry written after the managed one overrode it without showing up as drift, create didn't refuse to take it over, and apply left it in place. Such entries are now found, reported as drift and replaced, and `UNLIMITED` counts as `unlimited`. Fields are now split on ASCII white space only, as `pam_limits` splits them, so a line with a Unicode space such as U+00A0, which `pam_limits` skips, is no longer taken for an entry that shadows or replaces the managed one.
+- The `sysutils_file_acl` documentation now warns that an ACL applies to every hard link of a file, and that symlinks in the parent directories of `path` are followed.
+
 ### Tests
 
 - The [upgrade tests](./README.md#upgrade-tests) now cover every resource: `sysutils_firewall_rule` and `sysutils_swap`, the two that v1.1.0's `upgrade_local_acc_test.go` left out, are upgraded from v1.1.0 on the Terraform Registry (`upgrade_acc_test.go`) and from a local baseline build (`upgrade_local_acc_test.go`, with `SYSUTILS_UPGRADE_FROM_REF`). The firewall tests run Terraform, and with it the baseline provider, inside a private network namespace; the swap tests use `persist = false` and leave `/etc/fstab` alone.

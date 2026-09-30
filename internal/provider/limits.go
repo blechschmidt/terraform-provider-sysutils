@@ -424,17 +424,40 @@ func (e limitsEntry) line() string {
 	return fmt.Sprintf("%-15s %-5s %-15s %s", e.domain, e.typ, e.item, e.value)
 }
 
+// isLimitsSpace reports whether c separates the fields of a limits line:
+// the ASCII white space of C's isspace, which is what pam_limits splits on.
+// Unicode spaces such as U+00A0 are part of a field, as they are for
+// pam_limits, so that a line is never taken for an entry pam_limits ignores.
+func isLimitsSpace(r rune) bool {
+	return r == ' ' || r == '\t' || r == '\n' || r == '\v' || r == '\f' || r == '\r'
+}
+
+// asciiLower returns s with ASCII letters lowercased, like C's tolower in
+// the C locale.
+func asciiLower(s string) string {
+	b := []byte(s)
+	for i, c := range b {
+		if c >= 'A' && c <= 'Z' {
+			b[i] = c + ('a' - 'A')
+		}
+	}
+	return string(b)
+}
+
 // parseLimitsLine parses one line of a limits file as pam_limits does and
-// reports whether it is an entry.
+// reports whether it is an entry. pam_limits lowercases the type, item and
+// value before it uses them, so "SOFT NOFILE" is the same entry as "soft
+// nofile" and "UNLIMITED" the same value as "unlimited"; the entry returned
+// is lowercased the same way. The domain is compared as written.
 func parseLimitsLine(line string) (limitsEntry, bool) {
 	if i := strings.IndexByte(line, '#'); i >= 0 {
 		line = line[:i]
 	}
-	f := strings.Fields(line)
+	f := strings.FieldsFunc(line, isLimitsSpace)
 	if len(f) < 4 {
 		return limitsEntry{}, false
 	}
-	return limitsEntry{domain: f[0], typ: f[1], item: f[2], value: f[3]}, true
+	return limitsEntry{domain: f[0], typ: asciiLower(f[1]), item: asciiLower(f[2]), value: asciiLower(f[3])}, true
 }
 
 // findLimitsEntries returns the indexes of the lines that are entries with

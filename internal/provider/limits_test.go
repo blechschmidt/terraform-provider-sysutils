@@ -244,6 +244,13 @@ func TestParseLimitsLine(t *testing.T) {
 		{"# postgres soft nofile 65536", limitsEntry{}, false},
 		{"postgres soft nofile", limitsEntry{}, false},
 		{"", limitsEntry{}, false},
+		// pam_limits lowercases type, item and value, but not the domain.
+		{"Postgres SOFT NoFile UNLIMITED", limitsEntry{"Postgres", "soft", "nofile", "unlimited"}, true},
+		// pam_limits only splits on ASCII white space; with a no-break
+		// space, the line has three fields and is skipped.
+		{"postgres soft nofile 5", limitsEntry{}, false},
+		{"postgres soft\u0085nofile 5", limitsEntry{}, false},
+		{"postgres\vsoft\fnofile\t5\r", limitsEntry{"postgres", "soft", "nofile", "5"}, true},
 	}
 	for _, tc := range tests {
 		got, ok := parseLimitsLine(tc.line)
@@ -341,6 +348,42 @@ func TestSetLimitsEntry(t *testing.T) {
 	tf = parseTextFile([]byte("a soft nofile 1\na soft nofile 2\n"))
 	if v, n := lookupLimitsEntry(tf, limitsKey{"a", "soft", "nofile"}); v != "2" || n != 2 {
 		t.Errorf("lookupLimitsEntry with duplicates = %q, %d", v, n)
+	}
+}
+
+// An entry spelled in upper case is the same entry to pam_limits, which
+// lowercases type, item and value. It must be seen as drift when it
+// overrides the managed one, be refused as an existing entry on create, and
+// be replaced instead of left behind to override the managed value.
+func TestLimitsEntryCaseInsensitive(t *testing.T) {
+	k := limitsKey{"postgres", "soft", "nofile"}
+	tf := parseTextFile([]byte("postgres soft nofile 1024\npostgres SOFT NOFILE 999999\n"))
+	if v, n := lookupLimitsEntry(tf, k); v != "999999" || n != 2 {
+		t.Errorf("lookupLimitsEntry = %q, %d, want \"999999\", 2", v, n)
+	}
+	if !setLimitsEntry(tf, limitsEntry{"postgres", "soft", "nofile", "1024"}) {
+		t.Error("setLimitsEntry reported no change")
+	}
+	if got, want := string(tf.bytes()), "postgres soft nofile 1024\n"; got != want {
+		t.Errorf("after setLimitsEntry got %q, want %q", got, want)
+	}
+
+	tf = parseTextFile([]byte("postgres soft nofile UNLIMITED\n"))
+	if v, n := lookupLimitsEntry(tf, k); !limitsValuesEqual(v, "infinity") || n != 1 {
+		t.Errorf("lookupLimitsEntry = %q, %d, want unlimited, 1", v, n)
+	}
+	if setLimitsEntry(tf, limitsEntry{"postgres", "soft", "nofile", "unlimited"}) {
+		t.Error("setLimitsEntry changed an entry of an equal value")
+	}
+
+	// A line with a no-break space is not an entry for pam_limits, so it
+	// must not shadow the managed one or be removed.
+	tf = parseTextFile([]byte("postgres soft nofile 1024\npostgres soft nofile 5\n"))
+	if v, n := lookupLimitsEntry(tf, k); v != "1024" || n != 1 {
+		t.Errorf("lookupLimitsEntry = %q, %d, want \"1024\", 1", v, n)
+	}
+	if setLimitsEntry(tf, limitsEntry{"postgres", "soft", "nofile", "1024"}) {
+		t.Error("setLimitsEntry changed the file")
 	}
 }
 

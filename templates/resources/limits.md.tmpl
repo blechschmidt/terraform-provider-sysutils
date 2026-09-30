@@ -54,7 +54,7 @@ Everything is checked when Terraform plans, before any file is touched:
 
 The file is edited like `sysctl.d` files by [`sysutils_sysctl`](./sysctl.md): the new content is written to a temporary file next to it and renamed into place, keeping the file's mode, owner, group, ACLs and SELinux label. The edit is abandoned if the file was changed by someone else in the meantime. Edits of one file are serialized, including those of other resources and of other Terraform runs on the host, so several resources can share a file.
 
-- Comments, blank lines and all other entries stay exactly as they are. As in `pam_limits`, a `#` starts a comment anywhere in a line, and commented-out entries never match.
+- Comments, blank lines and all other entries stay exactly as they are. As in `pam_limits`, a `#` starts a comment anywhere in a line, and commented-out entries never match. Entries are matched as `pam_limits` reads them: the type, item and value are compared ignoring case (`postgres SOFT NOFILE 4096` is the same entry as `postgres soft nofile 4096`), the domain is compared exactly, and fields are separated by ASCII white space only, so a line with a Unicode space between its fields is not an entry.
 - An existing entry with a different value is replaced in place; new entries are appended at the end.
 - If the file has the entry several times, `pam_limits` uses the last one. Refresh warns about the extra entries, and the next apply that changes the resource removes them.
 - A missing file is created with mode `0644`, owned by the user running Terraform, along with `/etc/security/limits.d` if needed. It starts with a comment line that marks it as created by the provider.
