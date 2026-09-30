@@ -935,3 +935,21 @@ resource "sysutils_locale" "test" {
 		CheckDestroy: checkFileText(p, "LANG=C.UTF-8\n"),
 	})
 }
+
+func TestAccUpgradeLocal_alternatives(t *testing.T) {
+	// A link group of its own, with the link and alternatives in a
+	// temporary directory, so that the host's link groups are left alone.
+	e := newAltAccEnv(t)
+	resource.Test(t, resource.TestCase{
+		Steps: localUpgradeSteps(t, "sysutils_alternatives", fmt.Sprintf(`
+resource "sysutils_alternatives" "test" {
+  name              = %q
+  path              = %q
+  link              = %q
+  priority          = 10
+  remove_on_destroy = true
+}
+`, e.name, e.a, e.link)),
+		CheckDestroy: e.check("gone", ""),
+	})
+}

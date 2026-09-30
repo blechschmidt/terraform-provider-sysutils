@@ -108,7 +108,7 @@ resource "sysutils_symlink" "localtime" {
 
 **Names are the host's.** `owner` and `group` names are looked up in the build machine's `/etc/passwd` and `/etc/group`, not in the image's, so the example uses numeric IDs.
 
-**Only resources that write files can use `root_dir`.** Resources that change the running system, such as mounts, sysctls, kernel modules, services, packages, SSH keys and firewall rules, refuse to plan with `root_dir` set, so that an image configuration never changes the build machine by mistake. Users, groups, systemd units and commands always act on the host. The [provider page](../index.md#root-directory) lists every resource and the exceptions.
+**Only resources that write files can use `root_dir`.** Resources that change the running system, such as mounts, sysctls, kernel modules, services, packages, SSH keys, firewall rules and alternatives, refuse to plan with `root_dir` set, so that an image configuration never changes the build machine by mistake. Users, groups, systemd units and commands always act on the host. The [provider page](../index.md#root-directory) lists every resource and the exceptions.
 
 ## Plans as a dry run and drift report
 
@@ -179,7 +179,7 @@ resource "sysutils_package" "tools" {
 Terraform applies up to 10 resources at a time (`-parallelism`). All nine `sysutils_hosts_entry` resources above edit `/etc/hosts`. Each edit reads the file, changes its line and writes the file back, so two edits running at once would lose one of the changes. The provider prevents this:
 
 - **Edits of the same file are serialised.** Every resource that edits a shared file, such as `/etc/hosts`, `/etc/fstab`, a `sysctl.d` file, `authorized_keys` or an INI file, locks the file from before it reads it until after it has written it. Edits of different files still run in parallel. The lock follows the real path, so `/var/run/x` and `/run/x` share a lock, and with `root_dir` the lock is on the path on the host.
-- **Package manager commands run one at a time.** All `sysutils_package` and `sysutils_package_repository` operations share one lock, because apt, dnf, yum and apk fail rather than wait for each other. Many packages can be declared separately, but they install one after another.
+- **Package manager commands run one at a time.** All `sysutils_package`, `sysutils_package_repository` and `sysutils_alternatives` operations share one lock, because apt, dnf, yum and apk fail rather than wait for each other, and package scripts run the alternatives tools. Many packages can be declared separately, but they install one after another.
 - **Firewall changes run one at a time,** so that no rule is added or removed based on an outdated list of rules.
 - **Locks work across processes.** They use `flock(2)` on files in `/run/terraform-provider-sysutils` (for root), so two Terraform runs on one host, or two provider configurations in one run, also wait for each other.
 

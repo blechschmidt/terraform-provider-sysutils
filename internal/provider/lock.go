@@ -19,8 +19,10 @@ package provider
 //     keyed by the file's cleaned absolute host path (after root_dir has been
 //     applied by the caller), with symlinks in its parent directories
 //     resolved, so that different spellings of the same file share a lock.
-//   - lockPackageManager is a single lock for all package manager commands
-//     and for changes to the package manager's repository configuration.
+//   - lockPackageManager is a single lock for all package manager commands,
+//     for changes to the package manager's repository configuration and for
+//     the alternatives tools (update-alternatives, alternatives), which
+//     package scripts run too.
 //   - lockFirewall is a single lock for changes to the firewall rules of
 //     sysutils_firewall_rule, each of which lists the rules and then adds
 //     or deletes some.
