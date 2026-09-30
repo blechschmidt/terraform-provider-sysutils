@@ -7,11 +7,11 @@
 #     from this checkout (dev_overrides), so that the schema, attribute
 #     validators and ValidateConfig checks of the current code are applied.
 #     The directories are examples/, examples/provider, examples/complete,
-#     examples/guides/* and every examples/resources/* and
-#     examples/data-sources/* directory. A directory without a
-#     required_providers block (most resource examples) gets one for
-#     blechschmidt/sysutils; without it Terraform would look for
-#     hashicorp/sysutils.
+#     examples/guides/* and every examples/resources/*,
+#     examples/data-sources/* and examples/functions/* directory. A
+#     directory without a required_providers block (most resource examples)
+#     gets one for blechschmidt/sysutils; without it Terraform would look
+#     for hashicorp/sysutils.
 #  3. No fenced terraform or hcl code in templates/: pages must pull their
 #     HCL from examples/ with tffile, so that step 2 covers it.
 #  4. Every ```terraform block in README.md must appear verbatim in a file
@@ -59,7 +59,7 @@ provider_block='terraform {
 }'
 
 dirs=(examples examples/provider examples/complete)
-for d in "$repo"/examples/guides/*/ "$repo"/examples/resources/*/ "$repo"/examples/data-sources/*/; do
+for d in "$repo"/examples/guides/*/ "$repo"/examples/resources/*/ "$repo"/examples/data-sources/*/ "$repo"/examples/functions/*/; do
 	d=${d%/}
 	dirs+=("${d#"$repo"/}")
 done

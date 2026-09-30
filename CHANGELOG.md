@@ -2,6 +2,16 @@
 
 All notable changes to this provider are listed here. Versions follow [semantic versioning](https://semver.org/). The resource and data source pages under [`docs/`](./docs) describe each feature in full.
 
+## Unreleased
+
+### New features
+
+- Provider-defined functions, for Terraform 1.8 and later and OpenTofu 1.7 and later. They are pure: they only parse their argument, so they pair with `file()` or the `sysutils_file` data source.
+  - [`provider::sysutils::parse_ini`](./docs/functions/parse_ini.md) parses INI content into a map of sections to maps of keys to values, with the parser of `sysutils_ini_value`.
+  - [`provider::sysutils::parse_os_release`](./docs/functions/parse_os_release.md) parses `os-release` content into a map of fields, with the parser of the `sysutils_host` data source.
+  - [`provider::sysutils::parse_passwd_line`](./docs/functions/parse_passwd_line.md) and [`provider::sysutils::parse_fstab_line`](./docs/functions/parse_fstab_line.md) parse one line of `/etc/passwd` or `/etc/fstab` into an object, and return `null` for blank lines and comments.
+  - [`provider::sysutils::mode_to_octal`](./docs/functions/mode_to_octal.md) converts a mode in octal, `ls -l` or `chmod` symbolic notation to the four-digit octal form of the `mode` attributes.
+
 ## 1.2.1 (2026-09-30)
 
 Documentation fix only; the provider's code and schemas are unchanged from v1.2.0, so upgrading needs no changes to configuration or state.

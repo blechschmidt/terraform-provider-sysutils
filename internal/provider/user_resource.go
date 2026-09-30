@@ -386,11 +386,14 @@ func readPasswdEntry(username string) (*passwdEntry, error) {
 			return nil, fmt.Errorf("getent passwd: no entry named %q", username)
 		}
 	}
-	fields := strings.Split(line, ":")
-	if len(fields) != 7 {
-		return nil, fmt.Errorf("getent passwd %s: expected 7 colon-separated fields, got %d", username, len(fields))
+	e, ok, err := parsePasswdLine(line)
+	if err == nil && !ok {
+		err = fmt.Errorf("empty entry")
 	}
-	return &passwdEntry{Comment: fields[4], Shell: fields[6]}, nil
+	if err != nil {
+		return nil, fmt.Errorf("getent passwd %s: %w", username, err)
+	}
+	return &passwdEntry{Comment: e.gecos, Shell: e.shell}, nil
 }
 
 func readLoginShell(username string) (string, error) {

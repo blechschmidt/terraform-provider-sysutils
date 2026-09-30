@@ -6,6 +6,7 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
+	"github.com/hashicorp/terraform-plugin-framework/function"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/provider"
 	"github.com/hashicorp/terraform-plugin-framework/provider/schema"
@@ -307,6 +308,14 @@ func (p *sysutilsProvider) Resources(_ context.Context) []func() resource.Resour
 		NewLimitsResource,
 	}
 }
+
+// Functions implements provider.ProviderWithFunctions. Terraform before
+// 1.8 ignores them.
+func (p *sysutilsProvider) Functions(_ context.Context) []func() function.Function {
+	return providerFunctions()
+}
+
+var _ provider.ProviderWithFunctions = (*sysutilsProvider)(nil)
 
 func (p *sysutilsProvider) DataSources(_ context.Context) []func() datasource.DataSource {
 	return []func() datasource.DataSource{

@@ -54,6 +54,16 @@ The provider acts on the machine Terraform runs on. It has no remote-execution m
 
 Data sources are read on every plan, so they always reflect the current state of the host.
 
+| Function | Returns | Requires root |
+|----------|---------|---------------|
+| [`provider::sysutils::parse_ini`](./docs/functions/parse_ini.md) | INI content (`php.ini`, systemd units, git config) as a map of sections to maps of keys to values, read like `sysutils_ini_value` reads it | No |
+| [`provider::sysutils::parse_os_release`](./docs/functions/parse_os_release.md) | `os-release` content as a map of fields (`ID`, `VERSION_ID`, ...), decoded like the `sysutils_host` data source does, for example of an image tree | No |
+| [`provider::sysutils::parse_passwd_line`](./docs/functions/parse_passwd_line.md) | One `/etc/passwd` line as an object (`name`, `uid`, `gid`, `gecos`, `home`, `shell`); `null` for blank lines and comments | No |
+| [`provider::sysutils::parse_fstab_line`](./docs/functions/parse_fstab_line.md) | One `/etc/fstab` line as an object (`device`, `mount_point`, `fstype`, `options`, `dump`, `pass`), parsed like `sysutils_mount` does; `null` for blank lines and comments | No |
+| [`provider::sysutils::mode_to_octal`](./docs/functions/mode_to_octal.md) | A mode in octal (`"755"`), `ls -l` (`"rwxr-xr-x"`) or `chmod` symbolic (`"u=rwx,go=rx"`) notation as the four-digit octal string the `mode` attributes use (`"0755"`) | No |
+
+Functions are pure: they only parse their argument and never read files or look at the host, so pair them with `file()` or the `sysutils_file` data source. They need Terraform 1.8 or later, or OpenTofu 1.7 or later; the resources and data sources also work with older versions.
+
 **Drift detection** means that `terraform plan` compares the host with the state and shows changes made outside Terraform, and the next `terraform apply` reverts them. If a managed object is deleted outside Terraform, it is removed from state and recreated on the next apply.
 
 **Import** lets you adopt objects that already exist. After `terraform import`, the next plan lists every difference between the host and your configuration without changing anything. The import format for each resource is on its documentation page.
@@ -77,7 +87,7 @@ The only provider argument is the optional `root_dir`. With it, the resources th
 ### Requirements
 
 - Linux. The user and group resources call the `shadow-utils`/`passwd` tools; the file resources rely on Linux-specific system calls.
-- Terraform >= 1.5, or OpenTofu. CI runs the acceptance tests against Terraform 1.5, the latest Terraform and the latest OpenTofu.
+- Terraform >= 1.5, or OpenTofu; the provider-defined functions need Terraform >= 1.8 or OpenTofu >= 1.7. CI runs the acceptance tests against Terraform 1.5, the latest Terraform and the latest OpenTofu.
 - Root privileges for the operations marked in the feature matrix. The provider never elevates privileges itself; run Terraform as root, or with `sudo`, when you need them.
 
 ## Quick example
@@ -134,6 +144,7 @@ For a whole service host in one stack, see [`examples/complete`](./examples/comp
 - [Cookbook guides](#cookbook)
 - Resources: [`sysutils_file`](./docs/resources/file.md), [`sysutils_remote_file`](./docs/resources/remote_file.md), [`sysutils_file_line`](./docs/resources/file_line.md), [`sysutils_ini_value`](./docs/resources/ini_value.md), [`sysutils_hosts_entry`](./docs/resources/hosts_entry.md), [`sysutils_template_file`](./docs/resources/template_file.md), [`sysutils_directory`](./docs/resources/directory.md), [`sysutils_symlink`](./docs/resources/symlink.md), [`sysutils_file_acl`](./docs/resources/file_acl.md), [`sysutils_file_attributes`](./docs/resources/file_attributes.md), [`sysutils_archive_extract`](./docs/resources/archive_extract.md), [`sysutils_user`](./docs/resources/user.md), [`sysutils_group`](./docs/resources/group.md), [`sysutils_systemd_unit`](./docs/resources/systemd_unit.md), [`sysutils_service`](./docs/resources/service.md), [`sysutils_mount`](./docs/resources/mount.md), [`sysutils_swap`](./docs/resources/swap.md), [`sysutils_sysctl`](./docs/resources/sysctl.md), [`sysutils_kernel_module`](./docs/resources/kernel_module.md), [`sysutils_timezone`](./docs/resources/timezone.md), [`sysutils_hostname`](./docs/resources/hostname.md), [`sysutils_locale`](./docs/resources/locale.md), [`sysutils_ssh_authorized_key`](./docs/resources/ssh_authorized_key.md), [`sysutils_cron_job`](./docs/resources/cron_job.md), [`sysutils_sudoers`](./docs/resources/sudoers.md), [`sysutils_limits`](./docs/resources/limits.md), [`sysutils_firewall_rule`](./docs/resources/firewall_rule.md), [`sysutils_package`](./docs/resources/package.md), [`sysutils_package_repository`](./docs/resources/package_repository.md), [`sysutils_alternatives`](./docs/resources/alternatives.md), [`sysutils_exec`](./docs/resources/exec.md)
 - Data sources: [`sysutils_file`](./docs/data-sources/file.md), [`sysutils_directory`](./docs/data-sources/directory.md), [`sysutils_user`](./docs/data-sources/user.md), [`sysutils_group`](./docs/data-sources/group.md), [`sysutils_host`](./docs/data-sources/host.md), [`sysutils_package`](./docs/data-sources/package.md), [`sysutils_service`](./docs/data-sources/service.md), [`sysutils_mount`](./docs/data-sources/mount.md), [`sysutils_sysctl`](./docs/data-sources/sysctl.md)
+- Functions: [`parse_ini`](./docs/functions/parse_ini.md), [`parse_os_release`](./docs/functions/parse_os_release.md), [`parse_passwd_line`](./docs/functions/parse_passwd_line.md), [`parse_fstab_line`](./docs/functions/parse_fstab_line.md), [`mode_to_octal`](./docs/functions/mode_to_octal.md)
 - [Examples](./examples), including [`examples/complete`](./examples/complete), a whole service host in one stack
 
 ## Security considerations

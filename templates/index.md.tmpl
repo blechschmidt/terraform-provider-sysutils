@@ -53,6 +53,16 @@ The `sysutils` provider exposes a small set of primitives for host-level adminis
 | [`sysutils_package`](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs/data-sources/package) | Read whether an OS package is installed, its version and architecture, and the version the package index offers. |
 | [`sysutils_service`](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs/data-sources/service) | Read whether a service exists, starts at boot and is running. |
 
+| Function | Purpose |
+|----------|---------|
+| [`provider::sysutils::parse_ini`](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs/functions/parse_ini) | Parse INI content into a map of sections to maps of keys to values, the way `sysutils_ini_value` reads it. |
+| [`provider::sysutils::parse_os_release`](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs/functions/parse_os_release) | Parse `os-release` content into a map of fields, for example of an image tree. |
+| [`provider::sysutils::parse_passwd_line`](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs/functions/parse_passwd_line) | Parse one line of `/etc/passwd` into an object. |
+| [`provider::sysutils::parse_fstab_line`](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs/functions/parse_fstab_line) | Parse one line of `/etc/fstab` into an object, the way `sysutils_mount` reads it. |
+| [`provider::sysutils::mode_to_octal`](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs/functions/mode_to_octal) | Convert a mode in octal, `ls -l` or `chmod` symbolic notation to the four-digit octal form of the `mode` attributes. |
+
+The functions are pure (they only parse their argument) and need Terraform 1.8 or later, or OpenTofu 1.7 or later.
+
 It is intended for small bootstrapping tasks where installing and configuring something like Ansible or a full configuration-management system would be overkill.
 
 ## Cookbook
