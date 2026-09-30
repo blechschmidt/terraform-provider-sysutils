@@ -3,10 +3,13 @@ package provider
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/hashicorp/go-version"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
@@ -74,6 +77,8 @@ func upgradeSteps(t *testing.T, resourceType, config, updated string, checks ...
 		t.Skipf("%s is not in any release yet: it was added in %s, upgrade tests start from %s", resourceType, first, from)
 	}
 
+	waitForRegistryVersion(t, from)
+
 	// The in-process provider must have the released provider's address.
 	// This also overrides TF_ACC_PROVIDER_HOST=registry.opentofu.org, which
 	// the container script sets for OpenTofu: the released provider is
@@ -103,6 +108,59 @@ func upgradeSteps(t *testing.T, resourceType, config, updated string, checks ...
 			ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
 			Config:                   updated,
 		},
+	}
+}
+
+// upgradeRegistryWait bounds how long waitForRegistryVersion polls.
+const upgradeRegistryWait = 10 * time.Minute
+
+// waitForRegistryVersion waits until the registry lists version, which is
+// the request "init" makes. For a while after a release, some of the
+// registry's CDN edges still serve the old list of versions, and "init"
+// fails with "no available releases match the given constraints".
+func waitForRegistryVersion(t *testing.T, version string) {
+	t.Helper()
+	url := fmt.Sprintf("https://%s/v1/providers/%s/sysutils/versions", upgradeProviderHost, upgradeProviderNamespace)
+	client := &http.Client{Timeout: 30 * time.Second}
+	listed := func() (bool, error) {
+		resp, err := client.Get(url)
+		if err != nil {
+			return false, err
+		}
+		defer func() { _ = resp.Body.Close() }()
+		if resp.StatusCode != http.StatusOK {
+			return false, fmt.Errorf("GET %s: %s", url, resp.Status)
+		}
+		var body struct {
+			Versions []struct {
+				Version string `json:"version"`
+			} `json:"versions"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+			return false, fmt.Errorf("GET %s: %w", url, err)
+		}
+		for _, v := range body.Versions {
+			if v.Version == version {
+				return true, nil
+			}
+		}
+		return false, nil
+	}
+	deadline := time.Now().Add(upgradeRegistryWait)
+	for {
+		ok, err := listed()
+		if ok {
+			return
+		}
+		why := fmt.Sprintf("%s does not list version %s", url, version)
+		if err != nil {
+			why = err.Error()
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("%s after %s; was it released?", why, upgradeRegistryWait)
+		}
+		t.Logf("%s; retrying", why)
+		time.Sleep(15 * time.Second)
 	}
 }
 
