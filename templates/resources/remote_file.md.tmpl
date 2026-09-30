@@ -1,0 +1,81 @@
+---
+page_title: "{{.Name}} {{.Type}} - {{.ProviderName}}"
+subcategory: ""
+description: |-
+{{ .Description | plainmarkdown | trimspace | prefixlines "  " }}
+---
+
+# {{.Name}} ({{.Type}})
+
+{{ .Description | trimspace }}
+
+The file is downloaded to a temporary file next to `path` and renamed into place only after its size and checksum have been verified, so `path` never holds partial or unverified content, and a failed download leaves nothing behind. The URL is fetched when the file is created and when it must be downloaded again, never during refresh or plan: drift is detected from the local file alone.
+
+## Example Usage
+
+### Download a release, pinned by its checksum
+
+{{ tffile "examples/resources/sysutils_remote_file/resource.tf" }}
+
+### A private artifact with an authorization header
+
+{{ tffile "examples/resources/sysutils_remote_file/private.tf" }}
+
+### Without a published checksum
+
+{{ tffile "examples/resources/sysutils_remote_file/unverified.tf" }}
+
+To unpack a downloaded archive, pass `path` to the `source` of a [`sysutils_archive_extract`](./archive_extract.md); the [release installation guide](../guides/remote-release.md) shows the whole recipe.
+
+{{ .SchemaMarkdown | trimspace }}
+
+## When the File Is Downloaded
+
+| Situation | Download? |
+|-----------|-----------|
+| The resource is created and `path` does not exist | Yes |
+| The resource is created and `path` already holds a file that matches `checksum` | No; the file is adopted and only its mode and ownership are set |
+| The local file no longer matches `checksum` (content drift) | Yes |
+| The local file was deleted | Yes; the plan shows the resource being created again |
+| `checksum` changes | Only if the local file does not match the new checksum |
+| `url` changes and `checksum` is set | No: the checksum pins the content, wherever it comes from |
+| Without `checksum`: `url` changes, or the local file no longer has the SHA-256 it had after the last download | Yes |
+| `mode`, `owner` or `group` changed on disk or in the configuration | No; they are corrected in place |
+| `headers`, `timeout` or `max_size_bytes` change | No |
+| `force_redownload = true` | On every apply; every plan shows an update |
+
+A new release on the server is never noticed by itself: with `checksum`, change the checksum (and usually `url`); without one, change `url` or use `force_redownload`.
+
+## Import
+
+An existing file can be imported using its absolute path:
+
+{{ codefile "shell" .ImportFile }}
+
+Import records the file's mode, owner, group and SHA-256. `url` and `checksum` are not known yet, so the next plan shows them being added; if the file matches `checksum`, that apply records them without downloading anything. Terraform 1.5 and later can do both in one apply with an `import` block.
+
+## Drift Detection
+
+On refresh, the provider hashes the local file and reads its mode, owner and group; the URL is not contacted.
+
+- **Content**: if the file no longer matches `checksum`, refresh records the file's actual checksum, with the same algorithm, so the plan shows `checksum` changing from the actual value back to the configured one, and apply downloads the file again. Without `checksum`, a change shows as `sha256` becoming unknown.
+- **Mode, owner and group** changed outside Terraform are restored in place. If `owner` or `group` is not configured, its current value is recorded but no change is planned for it.
+- A deleted file is removed from state and downloaded again. Anything other than a regular file at `path` fails the refresh.
+
+Equivalent spellings are not drift: a mode of `"644"` matches `0644`, a UID matches its user name, and upper-case hex digits in `checksum` match lower-case ones.
+
+## Security
+
+- **Integrity**: with `checksum`, a download that does not match is discarded, whatever the transport. Plain `http` URLs are therefore safe for integrity when a checksum is set; without one, validation warns about them.
+- **Redirects**: at most 10 are followed. A redirect from an `https` URL to anything but `https` is refused, so an attacker who can tamper with a plain-text hop can't substitute content. Configured `headers` are sent only to the host and port of `url`; requests that a redirect sends to another host get none of them, so a token for an artifact repository does not leak to the CDN it redirects to.
+- **Credentials** belong in `headers`, which are sensitive. `url` must not contain `user:password@`, since it is stored in state and shown in plans. Header values are still stored in the state in plain text; protect the state accordingly.
+- **Size**: `max_size_bytes` is enforced while the response is read, not only against `Content-Length`, which a server can omit. The response is saved as served: the provider does not request compression, so the checksum applies to the bytes the server publishes, and a compressed response can't expand beyond the limit.
+- **TLS** uses the system's trusted CAs, requires TLS 1.2 or later, and honours the `HTTPS_PROXY`, `HTTP_PROXY` and `NO_PROXY` environment variables.
+- **The local file**: the temporary file has mode `0600` while it is written. Owner, group and mode are applied through its descriptor after verification, immediately before the atomic rename. A symlink, directory or other non-regular file at `path` is refused and never followed or replaced. Extended attributes of a replaced file, such as a POSIX ACL managed by [`sysutils_file_acl`](./file_acl.md) or an SELinux label, are carried over.
+
+## Caveats
+
+- The target's lock is held only for the rename, not during the download, so a slow download does not block other resources that edit files in the same run. See [Concurrency and Locking](../index.md#concurrency-and-locking).
+- Refresh reads the whole local file to hash it, which takes a moment for files of several gigabytes.
+- `path` is interpreted inside the provider's [`root_dir`](../index.md#root-directory) if one is set; the download itself always uses the network of the host running Terraform.
+- Symlinks in the parent components of `path` are followed. Every ancestor directory must be writable only by trusted users; see the provider's [security model](../index.md#security-model).

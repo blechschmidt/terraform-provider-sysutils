@@ -272,6 +272,7 @@ func (d *hostOnlyDataSource) checkHostOnly(diags *diag.Diagnostics) {
 func (p *sysutilsProvider) Resources(_ context.Context) []func() resource.Resource {
 	return []func() resource.Resource{
 		NewFileResource,
+		NewRemoteFileResource,
 		NewFileLineResource,
 		NewIniValueResource,
 		NewTemplateFileResource,

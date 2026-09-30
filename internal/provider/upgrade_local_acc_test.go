@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"os/user"
@@ -1123,5 +1125,30 @@ resource "sysutils_limits" "test" {
 }
 `, root)),
 		CheckDestroy: checkPathGone(filepath.Join(root, "etc", "security", "limits.d", "90-terraform-gid-1000-1999.conf")),
+	})
+}
+
+func TestAccUpgradeLocal_remoteFile(t *testing.T) {
+	// Plain http: the baseline runs as a separate process and can't be
+	// made to trust a test certificate. The checksum protects the content.
+	const content = "#!/bin/sh\necho 1.0\n"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(content))
+	}))
+	t.Cleanup(srv.Close)
+	target := filepath.Join(t.TempDir(), "bin", "tool")
+	resource.Test(t, resource.TestCase{
+		Steps: localUpgradeSteps(t, "sysutils_remote_file", fmt.Sprintf(`
+resource "sysutils_remote_file" "test" {
+  url      = %q
+  path     = %q
+  checksum = "sha256:%s"
+  mode     = "0755"
+  headers  = { Authorization = "Bearer t0ken" }
+}
+`, srv.URL+"/tool", target, sha256Hex([]byte(content))),
+			statecheck.ExpectKnownValue("sysutils_remote_file.test", tfjsonpath.New("sha256"),
+				knownvalue.StringExact(sha256Hex([]byte(content))))),
+		CheckDestroy: checkPathGone(target),
 	})
 }
