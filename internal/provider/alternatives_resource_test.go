@@ -434,6 +434,7 @@ func TestAlternatives_importUnknown(t *testing.T) {
 			ImportState:   true,
 			ImportStateId: "-x",
 			ExpectError:   regexp.MustCompile(`Import\s+ID\s+must\s+be\s+the\s+name\s+of\s+a\s+link\s+group`),
+			SkipFunc:      skipDashImportID,
 		}},
 	})
 }

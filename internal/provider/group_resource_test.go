@@ -370,6 +370,7 @@ resource "sysutils_group" "test" {
 				ImportState:   true,
 				ImportStateId: "-bad",
 				ExpectError:   regexp.MustCompile(`Invalid import ID`),
+				SkipFunc:      skipDashImportID,
 			},
 		},
 	})

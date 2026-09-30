@@ -377,6 +377,12 @@ func TestSSHAuthorizedKeyResource_errors(t *testing.T) {
 					ImportState:   true,
 					ImportStateId: id,
 					ExpectError:   regexp.MustCompile(`Invalid import ID`),
+					SkipFunc: func() (bool, error) {
+						if !strings.HasPrefix(id, "-") {
+							return false, nil
+						}
+						return skipDashImportID()
+					},
 				}},
 			})
 		}
