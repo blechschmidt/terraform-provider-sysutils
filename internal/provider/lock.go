@@ -21,6 +21,9 @@ package provider
 //     resolved, so that different spellings of the same file share a lock.
 //   - lockPackageManager is a single lock for all package manager commands
 //     and for changes to the package manager's repository configuration.
+//   - lockFirewall is a single lock for changes to the firewall rules of
+//     sysutils_firewall_rule, each of which lists the rules and then adds
+//     or deletes some.
 //
 // Each lock is an in-process mutex, which serialises the goroutines of this
 // provider process, combined with flock(2) on a lock file in a private
@@ -31,7 +34,8 @@ package provider
 // configuration directories.
 //
 // Lock order: the package-manager lock is taken before any file lock, never
-// the other way round, and no code holds two file locks at once.
+// the other way round, and no code holds two file locks at once. The
+// firewall lock is never held together with another lock.
 
 import (
 	"context"
@@ -54,6 +58,8 @@ const (
 	lockDirName = "terraform-provider-sysutils"
 	// packageManagerLockName is the lock file of lockPackageManager.
 	packageManagerLockName = "package-manager.lock"
+	// firewallLockName is the lock file of lockFirewall.
+	firewallLockName = "firewall.lock"
 )
 
 // fileLockTimeout bounds how long lockFileForEdit waits for another process
@@ -113,6 +119,16 @@ func lockPackageManager(ctx context.Context) (unlock func(), err error) {
 	unlock, err = acquireLock(ctx, "package-manager", packageManagerLockName)
 	if err != nil {
 		return nil, fmt.Errorf("waiting for the package manager lock: %w", err)
+	}
+	return unlock, nil
+}
+
+// lockFirewall takes the lock that serialises changes to firewall rules,
+// waiting until ctx is done.
+func lockFirewall(ctx context.Context) (unlock func(), err error) {
+	unlock, err = acquireLock(ctx, "firewall", firewallLockName)
+	if err != nil {
+		return nil, fmt.Errorf("waiting for the firewall lock: %w", err)
 	}
 	return unlock, nil
 }

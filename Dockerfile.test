@@ -17,13 +17,18 @@ ARG TF_CLI_VERSION=latest
 # acl, attr: setfacl/getfattr for the extended attribute tests.
 # locales, tzdata: locale-gen and zone files for the locale and time zone
 # tests.
+# nftables, iptables, iproute2: the firewall rule tests, which run them in a
+# network namespace of their own.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         acl \
         attr \
         ca-certificates \
         curl \
+        iproute2 \
+        iptables \
         locales \
+        nftables \
         passwd \
         tzdata \
         unzip \
