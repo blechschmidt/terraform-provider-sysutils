@@ -84,6 +84,39 @@ admdup:x:4:
 	}
 }
 
+// A database with millions of tiny entries, which a tree below root_dir can
+// hold within the size limit, is refused: every entry becomes values that
+// take hundreds of times its size, and 64 MiB of them took about 12 GB.
+func TestListAccountEntriesLimit(t *testing.T) {
+	lines := func(n int, line string) string { return strings.Repeat(line, n) }
+
+	if got, err := listPasswdEntries(strings.NewReader(lines(maxAccountListItems, "a:x:0:0:::\n")), "/etc/passwd"); err != nil || len(got) != maxAccountListItems {
+		t.Errorf("%d entries: got %d, %v; want all of them", maxAccountListItems, len(got), err)
+	}
+	// Comments and NIS compat lines do not count.
+	if _, err := listPasswdEntries(strings.NewReader(lines(maxAccountListItems, "a:x:0:0:::\n")+"#\n+\n"), "/etc/passwd"); err != nil {
+		t.Errorf("skipped lines counted: %v", err)
+	}
+	_, err := listPasswdEntries(strings.NewReader(lines(maxAccountListItems+1, "a:x:0:0:::\n")), "/etc/passwd")
+	if err == nil || !strings.Contains(err.Error(), "more than 100000 entries") {
+		t.Errorf("%d entries: got error %v, want the limit", maxAccountListItems+1, err)
+	}
+
+	for name, db := range map[string]string{
+		"groups":  lines(maxAccountListItems+1, "g:x:1:\n"),
+		"members": "g:x:1:" + strings.TrimSuffix(lines(maxAccountListItems, "m,"), ",") + "\n",
+		"both":    lines(maxAccountListItems/2, "g:x:1:m\n") + "h:x:2:n\n",
+	} {
+		_, err := listGroupEntries(strings.NewReader(db), "/etc/group")
+		if err == nil || !strings.Contains(err.Error(), "more than 100000 groups and group members") {
+			t.Errorf("%s: got error %v, want the limit", name, err)
+		}
+	}
+	if got, err := listGroupEntries(strings.NewReader(lines(maxAccountListItems/2, "g:x:1:m\n")), "/etc/group"); err != nil || len(got) != maxAccountListItems/2 {
+		t.Errorf("groups and members at the limit: got %d, %v", len(got), err)
+	}
+}
+
 // accountListTree is an image root filesystem with its own account
 // databases, which differ from any host's.
 var accountListTree = map[string]string{

@@ -96,10 +96,11 @@ Read-Only:
 | `uid_min` is greater than `uid_max` | `Invalid uid range` |
 | `/etc/passwd` is missing, cannot be read, is larger than 64 MiB, or its path leads outside `root_dir` | `Reading passwd database` |
 | `/etc/passwd` contains a line that is not a valid entry (not seven fields, an empty name, or a uid or gid that is not a number) | `Reading passwd database`, with the line number |
+| `/etc/passwd` has more than 100000 entries, before filtering | `Reading passwd database` |
 
 ## Caveats
 
 - The password field is never exposed; it is `x` on almost every system anyway, with the hash in `/etc/shadow`.
-- The whole list is stored in the state and shown in plans. On hosts with many local accounts, narrow it down with the filters.
+- The whole list is stored in the state and shown in plans. On hosts with many local accounts, narrow it down with the filters. A database with more than 100000 entries is refused, so that a tree below `root_dir` with millions of tiny entries can't exhaust the memory of the provider and of Terraform.
 - With the provider's `root_dir` set, symlinks such as an absolute `etc/passwd` link are resolved inside `root_dir`, as a chrooted process would; a link leading above `root_dir` is an error.
 - The data source only works on Unix-like systems.

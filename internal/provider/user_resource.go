@@ -409,7 +409,8 @@ func readLoginShell(username string) (string, error) {
 // listPasswdEntries returns every entry of the passwd database in r, in file
 // order, parsed with parsePasswdLine. Blank lines, comments and NIS compat
 // entries ("+", "-name", "+@netgroup") are skipped; any other line that
-// does not parse is an error. file names r in error messages.
+// does not parse is an error, and so are more than maxAccountListItems
+// entries. file names r in error messages.
 func listPasswdEntries(r io.Reader, file string) ([]passwdLine, error) {
 	entries := []passwdLine{}
 	sc := bufio.NewScanner(r)
@@ -424,6 +425,9 @@ func listPasswdEntries(r io.Reader, file string) ([]passwdLine, error) {
 			return nil, fmt.Errorf("%s:%d: %w", file, lineNo, err)
 		}
 		if ok {
+			if len(entries) == maxAccountListItems {
+				return nil, fmt.Errorf("%s has more than %d entries", file, maxAccountListItems)
+			}
 			entries = append(entries, e)
 		}
 	}

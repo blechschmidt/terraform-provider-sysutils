@@ -383,13 +383,18 @@ func scanGroupEntries(r io.Reader, match func(fields []string) bool) (*groupEntr
 // listGroupEntries returns every entry of the group database in r, in file
 // order. Unlike the lookups, which skip entries they are not looking for, it
 // reports an entry with a malformed gid, because the list would otherwise be
-// silently incomplete. file names r in error messages.
+// silently incomplete, and it fails if the groups and their members add up
+// to more than maxAccountListItems. file names r in error messages.
 func listGroupEntries(r io.Reader, file string) ([]groupEntry, error) {
 	entries := []groupEntry{}
+	items := 0
 	err := scanGroupLines(r, file, func(lineNo int, fields []string) (bool, error) {
 		e, err := parseGroupFields(file, lineNo, fields)
 		if err != nil {
 			return false, err
+		}
+		if items += 1 + len(e.Members); items > maxAccountListItems {
+			return false, fmt.Errorf("%s has more than %d groups and group members", file, maxAccountListItems)
 		}
 		entries = append(entries, *e)
 		return true, nil

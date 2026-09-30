@@ -324,12 +324,11 @@ resource "sysutils_file" "test" {
 	last := &steps[len(steps)-1]
 	last.ConfigStateChecks = []statecheck.StateCheck{
 		statecheck.ExpectKnownValue("sysutils_file.test", tfjsonpath.New("sensitive_content"), knownvalue.Null()),
-		statecheck.ExpectKnownValue("sysutils_file.test", tfjsonpath.New("content_sha256"),
-			knownvalue.StringExact(sha256Hex([]byte(secret)))),
+		statecheck.ExpectKnownValue("sysutils_file.test", tfjsonpath.New("content_sha256"), knownvalue.Null()),
 	}
 	last.Check = resource.ComposeAggregateTestCheckFunc(
 		checkFileContent(target, secret),
-		checkStateHasNoPlaintext(stateDir, sha256Hex([]byte(secret)), "wo-upgrade-8d2c"),
+		checkStateHasNoPlaintext(stateDir, secret, "wo-upgrade-8d2c"),
 	)
 	resource.Test(t, resource.TestCase{
 		TerraformVersionChecks: writeOnlyVersionChecks,

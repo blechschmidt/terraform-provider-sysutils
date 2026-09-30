@@ -167,7 +167,7 @@ A local user who can write to a directory above a managed path could try to plan
 
 Terraform state holds every attribute in plain text, and so does anything that has read access to your state backend.
 
-- `sysutils_file` stores `content`, `sensitive_content` and `content_base64` verbatim. `sensitive_content` is hidden in plans, which show only the change of `content_sha256`. For `source`, only the path and checksums are stored. For the write-only `content_wo` (Terraform 1.11 and later), only the checksums are stored: the value is never in the plan or the state, so it can come from an ephemeral variable or resource.
+- `sysutils_file` stores `content`, `sensitive_content` and `content_base64` verbatim. `sensitive_content` is hidden in plans, which show only the change of `content_sha256`. For `source`, only the path and checksums are stored. For the write-only `content_wo` (Terraform 1.11 and later), neither the value nor its checksums are stored, only a salted argon2id hash in private state for drift detection: the value is never in the plan or the state, so it can come from an ephemeral variable or resource.
 - The `sysutils_file` data source stores the file's contents. Don't point it at secrets.
 - `sysutils_file_line` stores the managed line or block, and `sysutils_ini_value` the managed value.
 - `sysutils_template_file` stores the template, its variables and the rendered content. With `sensitive_vars`, the rendered content goes into the sensitive `rendered_sensitive` attribute, so it's hidden in plans, but it is still in state.

@@ -31,6 +31,15 @@ var passwdFile = "/etc/passwd"
 // cannot exhaust the provider's memory. Real databases are far smaller.
 const maxAccountDBSize = 64 << 20
 
+// maxAccountListItems bounds the entries of /etc/passwd, and the groups
+// plus group members of /etc/group, that the list data sources accept.
+// Every item becomes several values in the provider, in Terraform and in
+// the state, which take hundreds of times the item's size in the file, so
+// the size limit alone would let a tree below root_dir with millions of
+// tiny entries exhaust the memory of the host. Real databases are far
+// smaller.
+const maxAccountListItems = 100_000
+
 func NewUsersDataSource() datasource.DataSource { return &usersDataSource{} }
 
 type usersDataSource struct{ rootedDataSource }

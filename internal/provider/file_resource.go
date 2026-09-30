@@ -100,8 +100,9 @@ func (r *fileResource) Schema(_ context.Context, _ resource.SchemaRequest, resp 
 					"the value is never stored in the plan or the state, so it may come from an ephemeral resource or ephemeral variable. Requires Terraform 1.11 or later. " +
 					"Exactly one of `content`, `sensitive_content`, `content_wo`, `content_base64` and `source` must be set. " +
 					"Terraform does not remember the value, so a changed value is not detected: the file is written on create, when `content_wo_version` changes, and when the file on disk no longer matches what the provider last wrote. " +
-					"For that comparison, the SHA-256 checksum of the written content is kept in the resource's private state. " +
-					"`content_sha256` and `content_md5` are known only after apply whenever the file is written.",
+					"For that comparison, the resource's private state keeps a salted argon2id hash of the written content. " +
+					"`content_sha256` and `content_md5` are always null with `content_wo`, as a checksum of a short secret would let anyone who can read the state check guesses; " +
+					"use `content_wo_version` to make other resources react to a new value.",
 			},
 			"content_wo_version": schema.Int64Attribute{
 				Optional: true,
@@ -130,13 +131,14 @@ func (r *fileResource) Schema(_ context.Context, _ resource.SchemaRequest, resp 
 			"content_sha256": schema.StringAttribute{
 				Computed: true,
 				MarkdownDescription: "Hex-encoded SHA-256 checksum of the file contents. " +
-					"Computed from the configuration during plan (from the source file, for `source`), so it is known before apply and other resources can depend on it to react to content changes.",
+					"Computed from the configuration during plan (from the source file, for `source`), so it is known before apply and other resources can depend on it to react to content changes. " +
+					"Always null with `content_wo`.",
 			},
 			"content_md5": schema.StringAttribute{
 				Computed: true,
 				MarkdownDescription: "Hex-encoded MD5 checksum of the file contents. " +
 					"Provided for interoperability; use `content_sha256` where integrity matters. " +
-					"Like `content_sha256`, it is known at plan time.",
+					"Like `content_sha256`, it is known at plan time, and always null with `content_wo`.",
 			},
 			"mode": schema.StringAttribute{
 				Optional: true,
@@ -198,8 +200,10 @@ func (r *fileResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRe
 	sha, md := types.StringUnknown(), types.StringUnknown()
 	if !config.ContentWO.IsNull() {
 		// The value of content_wo is not planned: an ephemeral value may
-		// differ at apply. The checksums are unknown if the file will be
-		// written, and otherwise stay as refreshed.
+		// differ at apply. Its checksums are never stored, as they would
+		// reveal a low-entropy secret; they are planned as unknown (and
+		// become null) when an existing file must be rewritten, so that
+		// drift found by refresh plans an update.
 		var prior *fileModel
 		if !req.State.Raw.IsNull() {
 			prior = &fileModel{}
@@ -209,13 +213,13 @@ func (r *fileResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRe
 				prior = nil
 			}
 		}
-		written, diags := getPrivateString(ctx, req.Private, fileContentWOPrivateKey)
+		rec, diags := loadContentWORecord(ctx, req.Private)
 		resp.Diagnostics.Append(diags...)
 		if resp.Diagnostics.HasError() {
 			return
 		}
-		if prior != nil && !contentWONeedsWrite(prior, config.ContentWOVersion, written) {
-			sha, md = prior.ContentSHA256, prior.ContentMD5
+		if prior == nil || !contentWONeedsWrite(prior, config.ContentWOVersion, rec) {
+			sha, md = types.StringNull(), types.StringNull()
 		}
 		resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("content_sha256"), sha)...)
 		resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("content_md5"), md)...)
@@ -281,11 +285,15 @@ func (r *fileResource) Create(ctx context.Context, req resource.CreateRequest, r
 		return
 	}
 	planned := plan.ContentSHA256
+	var rec *contentWORecord
 	if writeOnly {
-		resp.Diagnostics.Append(setPrivateJSON(ctx, resp.Private, fileContentWOPrivateKey, written.sha256)...)
+		if rec, err = newContentWORecord(written.sha256); err != nil {
+			resp.Diagnostics.AddError("Recording written content", capitalize(err.Error())+".")
+			return
+		}
 	}
 
-	found, diags := readFile(target, &plan, writeOnly)
+	found, diags := readFile(target, &plan, rec)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -294,6 +302,9 @@ func (r *fileResource) Create(ctx context.Context, req resource.CreateRequest, r
 		resp.Diagnostics.AddError("Writing file",
 			fmt.Sprintf("File %q disappeared immediately after creation.", target))
 		return
+	}
+	if writeOnly {
+		resp.Diagnostics.Append(storeContentWORecord(ctx, resp.Private, rec)...)
 	}
 	// The file exists either way; record it so a failure below taints it
 	// rather than orphaning it.
@@ -315,14 +326,20 @@ func (r *fileResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	// A resource that uses content_wo has the checksum of what was written
-	// in its private state; its content must never be read into the state.
-	written, diags := getPrivateString(ctx, req.Private, fileContentWOPrivateKey)
+	// A resource that uses content_wo has a record of what was written in
+	// its private state; its content must never be read into the state.
+	rec, diags := loadContentWORecord(ctx, req.Private)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	found, diags := readFile(target, &state, written != "")
+	// Without a record, a resource that has been read before (unlike one
+	// being imported, whose mode is not known yet) and stores no content
+	// uses content_wo as well; its file is rewritten on the next apply.
+	if rec == nil && usesNoContentAttribute(&state) && !state.Mode.IsNull() {
+		rec = &contentWORecord{Drift: true}
+	}
+	found, diags := readFile(target, &state, rec)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -330,6 +347,9 @@ func (r *fileResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 	if !found {
 		resp.State.RemoveResource(ctx)
 		return
+	}
+	if rec != nil {
+		resp.Diagnostics.Append(storeContentWORecord(ctx, resp.Private, rec)...)
 	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &state)...)
 }
@@ -370,28 +390,26 @@ func (r *fileResource) Update(ctx context.Context, req resource.UpdateRequest, r
 	writeOnly := !config.ContentWO.IsNull()
 
 	var written checksums
+	var rec *contentWORecord
 	if writeOnly {
-		recorded, diags := getPrivateString(ctx, req.Private, fileContentWOPrivateKey)
+		var diags diag.Diagnostics
+		rec, diags = loadContentWORecord(ctx, req.Private)
 		resp.Diagnostics.Append(diags...)
 		if resp.Diagnostics.HasError() {
 			return
 		}
 		// The same decision as in ModifyPlan: without a new version or
 		// drift, only mode and ownership are applied.
-		if contentWONeedsWrite(&state, plan.ContentWOVersion, recorded) {
+		if contentWONeedsWrite(&state, plan.ContentWOVersion, rec) {
 			written, err = writeFile(target, strings.NewReader(config.ContentWO.ValueString()), mode, owner, group)
-			recorded = written.sha256
+			if err == nil {
+				rec, err = newContentWORecord(written.sha256)
+			}
 		} else {
 			err = applyFileMetadata(target, mode, owner, group)
 		}
-		if err == nil {
-			resp.Diagnostics.Append(setPrivateJSON(ctx, resp.Private, fileContentWOPrivateKey, recorded)...)
-		}
 	} else {
 		written, err = writeDesiredContent(target, &plan, mode, owner, group)
-		if err == nil {
-			resp.Diagnostics.Append(resp.Private.SetKey(ctx, fileContentWOPrivateKey, nil)...)
-		}
 	}
 	if err != nil {
 		resp.Diagnostics.AddError("Writing file", err.Error())
@@ -399,7 +417,7 @@ func (r *fileResource) Update(ctx context.Context, req resource.UpdateRequest, r
 	}
 	planned := plan.ContentSHA256
 
-	found, diags := readFile(target, &plan, writeOnly)
+	found, diags := readFile(target, &plan, rec)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -409,6 +427,8 @@ func (r *fileResource) Update(ctx context.Context, req resource.UpdateRequest, r
 			fmt.Sprintf("File %q disappeared during update.", target))
 		return
 	}
+	// A nil rec removes the record when switching away from content_wo.
+	resp.Diagnostics.Append(storeContentWORecord(ctx, resp.Private, rec)...)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 	if !writeOnly {
 		resp.Diagnostics.Append(checkWrittenChecksum(&plan, planned, written)...)
@@ -496,28 +516,6 @@ func writeFileTo(target string, content io.Reader, mode fs.FileMode, owner, grou
 		return checksums{}, err
 	}
 	return h.sums(), nil
-}
-
-// fileContentWOPrivateKey is the private state key under which the
-// hex-encoded SHA-256 checksum of the content last written from content_wo
-// is kept, as a JSON string. Its presence also marks a resource whose
-// content must not be read into the state.
-const fileContentWOPrivateKey = "content_wo_sha256"
-
-// contentWONeedsWrite reports whether content_wo must be written to the file
-// of the resource whose refreshed prior state is prior, given the planned
-// content_wo_version and the checksum recorded in private state (written,
-// "" if none). It must be: when the version changes (or is not known yet),
-// when nothing was recorded (as after import, or when switching from another
-// content attribute), and when the file on disk no longer has the recorded
-// checksum. A changed content_wo alone is not detected; Terraform keeps no
-// trace of it.
-func contentWONeedsWrite(prior *fileModel, version types.Int64, written string) bool {
-	return version.IsUnknown() ||
-		!version.Equal(prior.ContentWOVersion) ||
-		written == "" ||
-		prior.ContentSHA256.IsNull() || prior.ContentSHA256.IsUnknown() ||
-		prior.ContentSHA256.ValueString() != written
 }
 
 // applyFileMetadata applies mode and ownership to the existing regular file
@@ -743,11 +741,12 @@ func refreshContent(m *fileModel, content []byte) {
 //   - source: left untouched; the source's contents are never stored, and
 //     drift is detected by comparing content_sha256 with the checksum
 //     computed during plan.
-//   - content_wo (writeOnly): left untouched as well; drift is detected by
-//     comparing content_sha256 with the checksum in private state.
+//   - content_wo (wo is not nil): left untouched as well, and the checksums
+//     are null, as they would reveal a low-entropy secret. wo.Drift is set
+//     if the file no longer has the content wo records.
 //   - none (after import): content if the file is UTF-8 text, otherwise
 //     content_base64.
-func readFile(target string, m *fileModel, writeOnly bool) (found bool, diags diag.Diagnostics) {
+func readFile(target string, m *fileModel, wo *contentWORecord) (found bool, diags diag.Diagnostics) {
 	info, err := os.Lstat(target)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -783,7 +782,7 @@ func readFile(target string, m *fileModel, writeOnly bool) (found bool, diags di
 		return true, diags
 	}
 	var sums checksums
-	if m.Source.IsNull() && !writeOnly {
+	if m.Source.IsNull() && wo == nil {
 		content, err := io.ReadAll(f)
 		if err != nil {
 			diags.AddError("Read failed", err.Error())
@@ -798,8 +797,13 @@ func readFile(target string, m *fileModel, writeOnly bool) (found bool, diags di
 		diags.AddError("Read failed", err.Error())
 		return false, diags
 	}
-	m.ContentSHA256 = types.StringValue(sums.sha256)
-	m.ContentMD5 = types.StringValue(sums.md5)
+	if wo != nil {
+		wo.Drift = !wo.matches(sums.sha256)
+		m.ContentSHA256, m.ContentMD5 = types.StringNull(), types.StringNull()
+	} else {
+		m.ContentSHA256 = types.StringValue(sums.sha256)
+		m.ContentMD5 = types.StringValue(sums.md5)
+	}
 
 	m.Mode = types.StringValue(reconcileMode(knownString(m.Mode), info.Mode()))
 	st, ok := info.Sys().(*syscall.Stat_t)

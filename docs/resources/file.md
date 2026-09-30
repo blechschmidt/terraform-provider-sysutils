@@ -82,9 +82,10 @@ variable "api_token_version" {
   default     = 1
 }
 
-# The state holds neither the token nor the file's content, only its
-# checksums. The file is written on create, when content_wo_version changes,
-# and when it was changed outside Terraform.
+# The state holds neither the token nor its checksums (content_sha256 is
+# null). The file is written on create, when content_wo_version changes,
+# and when it was changed outside Terraform. Use content_wo_version, not
+# content_sha256, in triggers such as restart_on_change.
 resource "sysutils_file" "api_token" {
   path               = "/etc/app/token.env"
   content_wo         = "API_TOKEN=${var.api_token}\n"
@@ -100,7 +101,9 @@ Because Terraform keeps no copy of the value, it can't tell when the value chang
 - when the file on disk no longer matches what the provider last wrote (see [Drift Detection](#drift-detection));
 - on the first apply after switching from another content attribute, or after import.
 
-A changed `content_wo` alone plans no change. Whenever the file will be written, `content_sha256` and `content_md5` are `(known after apply)`: an ephemeral value may differ between plan and apply, so the provider does not compute them from the planned value. Otherwise they keep the checksums of the file on disk, so `restart_on_change` of `sysutils_service` and similar triggers still see every write.
+A changed `content_wo` alone plans no change.
+
+`content_sha256` and `content_md5` are always null with `content_wo`: a checksum of a short secret, such as a password, would let anyone who can read the state check guesses at high speed. When an existing file will be rewritten, the plan shows them as `(known after apply)`, and they become null again. To make other resources react to a new value, for example `restart_on_change` of `sysutils_service`, use `content_wo_version`; a file rewritten only because of drift restores the content the service already had.
 
 With Terraform before 1.11 and OpenTofu before 1.11, a configuration that sets `content_wo` fails validation with "Write-only attributes are only supported in Terraform 1.11 and later".
 
@@ -119,7 +122,7 @@ With Terraform before 1.11 and OpenTofu before 1.11, a configuration that sets `
 
 - `content` (String) File contents as UTF-8 text. Exactly one of `content`, `sensitive_content`, `content_wo`, `content_base64` and `source` must be set. If the file is changed outside Terraform, refresh records its actual text here, so the plan shows a line-by-line diff of the drift.
 - `content_base64` (String) File contents as standard (padded) base64, for binary data. Use `filebase64()` or `base64encode()` to produce it. Exactly one of `content`, `sensitive_content`, `content_wo`, `content_base64` and `source` must be set. If the file is changed outside Terraform, refresh records the base64 encoding of its actual contents here, so the plan shows the drift.
-- `content_wo` (String, Sensitive, [Write-only](https://developer.hashicorp.com/terraform/language/resources/ephemeral#write-only-arguments)) File contents as UTF-8 text, as a write-only argument: the value is never stored in the plan or the state, so it may come from an ephemeral resource or ephemeral variable. Requires Terraform 1.11 or later. Exactly one of `content`, `sensitive_content`, `content_wo`, `content_base64` and `source` must be set. Terraform does not remember the value, so a changed value is not detected: the file is written on create, when `content_wo_version` changes, and when the file on disk no longer matches what the provider last wrote. For that comparison, the SHA-256 checksum of the written content is kept in the resource's private state. `content_sha256` and `content_md5` are known only after apply whenever the file is written.
+- `content_wo` (String, Sensitive, [Write-only](https://developer.hashicorp.com/terraform/language/resources/ephemeral#write-only-arguments)) File contents as UTF-8 text, as a write-only argument: the value is never stored in the plan or the state, so it may come from an ephemeral resource or ephemeral variable. Requires Terraform 1.11 or later. Exactly one of `content`, `sensitive_content`, `content_wo`, `content_base64` and `source` must be set. Terraform does not remember the value, so a changed value is not detected: the file is written on create, when `content_wo_version` changes, and when the file on disk no longer matches what the provider last wrote. For that comparison, the resource's private state keeps a salted argon2id hash of the written content. `content_sha256` and `content_md5` are always null with `content_wo`, as a checksum of a short secret would let anyone who can read the state check guesses; use `content_wo_version` to make other resources react to a new value.
 - `content_wo_version` (Number) Any number; change it to write the current value of `content_wo` to the file. Requires `content_wo`. Changing it plans an in-place update; the value itself is stored in the state.
 - `group` (String) Group name or numeric GID of the file. Requires privileges to change. If unset, the group assigned at creation is kept.
 - `mode` (String) Octal mode with 3 or 4 digits, optionally with a leading zero, such as `"0644"`, `"600"` or `"4755"`. The mode is applied with an explicit `chmod`, so the process umask does not affect it. Defaults to `"0644"`.
@@ -129,8 +132,8 @@ With Terraform before 1.11 and OpenTofu before 1.11, a configuration that sets `
 
 ### Read-Only
 
-- `content_md5` (String) Hex-encoded MD5 checksum of the file contents. Provided for interoperability; use `content_sha256` where integrity matters. Like `content_sha256`, it is known at plan time.
-- `content_sha256` (String) Hex-encoded SHA-256 checksum of the file contents. Computed from the configuration during plan (from the source file, for `source`), so it is known before apply and other resources can depend on it to react to content changes.
+- `content_md5` (String) Hex-encoded MD5 checksum of the file contents. Provided for interoperability; use `content_sha256` where integrity matters. Like `content_sha256`, it is known at plan time, and always null with `content_wo`.
+- `content_sha256` (String) Hex-encoded SHA-256 checksum of the file contents. Computed from the configuration during plan (from the source file, for `source`), so it is known before apply and other resources can depend on it to react to content changes. Always null with `content_wo`.
 - `id` (String) Resource identifier (equal to `path`).
 
 ## Import
@@ -152,7 +155,7 @@ How content drift is shown depends on the content attribute in use:
 - `content`: the file's current text is read into `content`, so the plan shows a readable, line-by-line diff from what is on disk to what will be written. If the file no longer contains valid UTF-8 text, the difference appears in `content_sha256` instead.
 - `sensitive_content`: the file's current text is read into `sensitive_content` as well, but Terraform hides it, so the plan shows only `(sensitive value)` and the change to `content_sha256` and `content_md5`.
 - `content_base64`: the base64 encoding of the file's current contents is recorded, so the plan shows the old and new encodings. A configured value that decodes to the same bytes as the file is kept as written, so a non-canonical encoding (for example with line breaks) does not cause a perpetual diff.
-- `content_wo`: only the checksums of the file on disk are recorded, never its content. The SHA-256 checksum of what the provider last wrote is kept in the resource's private state; when the checksum of the file on disk differs, the plan shows `content_sha256` changing to `(known after apply)`, and apply writes the current value of `content_wo`.
+- `content_wo`: neither the content nor its checksums are recorded. The resource's private state keeps a salted [argon2id](https://www.rfc-editor.org/rfc/rfc9106) hash of what the provider last wrote; when refresh finds that the file on disk no longer matches it, the plan shows `content_sha256` changing to `(known after apply)`, and apply writes the current value of `content_wo`. Checking a guess of the secret against the hash costs a full argon2id computation (19 MiB of memory, two passes), instead of one fast SHA-256.
 - `source`: only the checksums of the file on disk are recorded. The plan compares them with the checksums of the source file, so drift appears as a change to `content_sha256` and `content_md5`. The file contents themselves are never stored in state for `source`.
 
 If a value in `content` comes from a sensitive variable, Terraform hides it in plans as well; the checksums still show whether the content changes. Use `sensitive_content` when the value is secret but not marked sensitive, for example when it is read with `file()`.
@@ -165,7 +168,7 @@ If the file has been deleted, it is removed from state and recreated on the next
 
 ## Caveats
 
-- `content`, `sensitive_content` and `content_base64` are stored verbatim in Terraform state (for `source` and `content_wo`, only the checksums are); `sensitive_content` is only hidden from plans and output. For secrets, use `content_wo`, or make sure that your state backend is encrypted and access-controlled. The checksums are not secret: for a short, guessable secret, `content_sha256` (and the checksum in the private state of `content_wo`) allows checking guesses, so prefer long random secrets, or put a random value next to a short one in the same file.
+- `content`, `sensitive_content` and `content_base64` are stored verbatim in Terraform state (for `source`, only the checksums are; for `content_wo`, only a salted argon2id hash in private state); `sensitive_content` is only hidden from plans and output. For secrets, use `content_wo`, or make sure that your state backend is encrypted and access-controlled. The checksums are not secret: for a short, guessable secret in `content`, `sensitive_content` or `source`, `content_sha256` allows checking guesses. The argon2id hash of `content_wo` makes guessing slow, not impossible, so prefer long random secrets.
 - If a `source` file changes between plan and apply, apply writes the new contents but fails with "Content changed during apply" rather than recording checksums that do not match the plan; run apply again.
 - `content_base64` is decoded in memory, and its encoded form is stored in state. For large files, prefer `source`, whose contents are streamed.
 - The file is rewritten in place, not atomically; a process reading it during an apply may see partial content. Ownership and mode are applied before the new content is written.

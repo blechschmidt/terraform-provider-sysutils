@@ -100,11 +100,12 @@ Read-Only:
 | `gid_min` is greater than `gid_max` | `Invalid gid range` |
 | `/etc/group` is missing, cannot be read, is larger than 64 MiB, or its path leads outside `root_dir` | `Reading group database` |
 | `/etc/group` contains a line that is not a valid entry (not four fields, or a gid that is not a number) | `Reading group database`, with the line number |
+| `/etc/group` has more than 100000 groups and group members together, before filtering | `Reading group database` |
 
 ## Caveats
 
 - `members` and the `member` filter only consider the users named in each group's `/etc/group` entry. Users whose primary group it is are members too, but are not listed there; find them with the `gid` filter of the [`sysutils_users`](./users.md) data source.
 - The group password field is never exposed.
-- The whole list is stored in the state and shown in plans. On hosts with many local groups, narrow it down with the filters.
+- The whole list is stored in the state and shown in plans. On hosts with many local groups, narrow it down with the filters. A database with more than 100000 groups and group members together is refused, so that a tree below `root_dir` with millions of tiny entries can't exhaust the memory of the provider and of Terraform.
 - With the provider's `root_dir` set, symlinks such as an absolute `etc/group` link are resolved inside `root_dir`, as a chrooted process would; a link leading above `root_dir` is an error.
 - The data source only works on Unix-like systems.
