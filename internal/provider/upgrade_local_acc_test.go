@@ -1080,3 +1080,29 @@ func TestAccUpgradeLocal_swap(t *testing.T) {
 		CheckDestroy: env.checkSwapUpgradeDestroyed(t),
 	})
 }
+
+func TestAccUpgradeLocal_fileACL(t *testing.T) {
+	dir := testACLDir(t)
+	d := filepath.Join(dir, "shared")
+	if err := os.Mkdir(d, 0o750); err != nil {
+		t.Fatal(err)
+	}
+	resource.Test(t, resource.TestCase{
+		Steps: localUpgradeSteps(t, "sysutils_file_acl", fmt.Sprintf(`
+resource "sysutils_file_acl" "test" {
+  path = %q
+  entries = [
+    { type = "user", name = "65534", permissions = "rwx" },
+    { type = "group", name = "65534", permissions = "r-x" },
+  ]
+  default_entries = [
+    { type = "group", name = "65534", permissions = "r-x" },
+  ]
+}
+`, d)),
+		CheckDestroy: resource.ComposeAggregateTestCheckFunc(
+			checkACL(d, false, "u::rwx,g::r-x,o::---"),
+			checkACL(d, true, ""),
+		),
+	})
+}

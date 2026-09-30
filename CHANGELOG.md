@@ -4,6 +4,10 @@ All notable changes to this provider are listed here. Versions follow [semantic 
 
 ## Unreleased
 
+### New resources
+
+- [`sysutils_file_acl`](./docs/resources/file_acl.md) manages the POSIX access ACL of an existing file or directory and, with `default_entries`, a directory's default ACL, like `setfacl`. Entries are named users and groups, the mask and optionally the owner, owning group and other entries, with permissions such as `"r-x"`. With `exclusive = true`, the default, named entries that are not listed are removed; with `false`, only the listed ones are ensured. The mask is computed as `setfacl` does unless it is given. The ACLs are read and written directly as the `system.posix_acl_access` and `system.posix_acl_default` extended attributes, through a descriptor opened with `O_NOFOLLOW`, so no `setfacl` is needed and symlinks are refused; `root_dir` is honoured. Destroy removes the managed extended entries and leaves the owner, group and other permissions alone. Supports import by path and detects added, removed and changed entries, a narrowed mask and a removed default ACL.
+
 ### New data sources
 
 - [`sysutils_package`](./docs/data-sources/package.md) reads whether an OS package is installed, its `version` and `architecture`, and the `available_version` the local package index offers (apt's candidate, or the newest version in the repositories with dnf, yum and apk), with the backends and detection of the `sysutils_package` resource. It only runs read-only queries and needs no root; dnf and yum query their metadata in cache-only mode, so that it isn't downloaded when it has expired. `refresh_cache = true` refreshes the index first, taking the provider's package-manager lock, at most once per provider run.
