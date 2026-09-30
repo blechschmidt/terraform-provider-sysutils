@@ -75,7 +75,7 @@ func TestReadOSReleaseDirectorySwap(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	testHookOSReleaseResolved = func(string) {
+	testHookRootedFileResolved = func(string) {
 		etc := filepath.Join(dir, "root", "etc")
 		if err := os.Rename(etc, etc+".old"); err != nil {
 			t.Error(err)
@@ -84,7 +84,7 @@ func TestReadOSReleaseDirectorySwap(t *testing.T) {
 			t.Error(err)
 		}
 	}
-	defer func() { testHookOSReleaseResolved = nil }()
+	defer func() { testHookRootedFileResolved = nil }()
 	r, err := readOSReleaseWithin(t, root)
 	if err == nil {
 		t.Fatalf("readOSRelease read %v through a swapped directory", r)

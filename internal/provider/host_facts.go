@@ -163,9 +163,9 @@ func (r osRelease) versionCodename() string {
 	return r["UBUNTU_CODENAME"]
 }
 
-// testHookOSReleaseResolved, if set, runs after an os-release path below
-// root_dir was resolved and before it is opened.
-var testHookOSReleaseResolved func(host string)
+// testHookRootedFileResolved, if set, runs after readRootedFile resolved a
+// path below root_dir and before it opens it.
+var testHookRootedFileResolved func(host string)
 
 // readOSRelease reads the first os-release file that exists below root,
 // following symlinks inside it (/etc/os-release usually is one). It
@@ -173,21 +173,7 @@ var testHookOSReleaseResolved func(host string)
 // none.
 func readOSRelease(root *fsRoot) (osRelease, string, error) {
 	for _, p := range osReleasePaths {
-		host, err := root.resolveFollow(p)
-		if err != nil {
-			if errors.Is(err, fs.ErrNotExist) {
-				continue
-			}
-			return nil, p, err
-		}
-		read := readBounded
-		if !root.isHost() {
-			if testHookOSReleaseResolved != nil {
-				testHookOSReleaseResolved(host)
-			}
-			read = readBoundedNoSymlinks
-		}
-		data, err := read(host, maxOSReleaseSize)
+		data, err := readRootedFile(root, p, maxOSReleaseSize)
 		if errors.Is(err, fs.ErrNotExist) {
 			continue
 		}
@@ -197,6 +183,23 @@ func readOSRelease(root *fsRoot) (osRelease, string, error) {
 		return parseOSRelease(data), p, nil
 	}
 	return nil, "", fmt.Errorf("neither %s exists below %s: %w", strings.Join(osReleasePaths, " nor "), root, fs.ErrNotExist)
+}
+
+// readRootedFile reads the regular file at the managed path p below root,
+// following symlinks inside the root as a chroot would, and fails if it is
+// larger than limit. Errors for a missing file wrap fs.ErrNotExist.
+func readRootedFile(root *fsRoot, p string, limit int64) ([]byte, error) {
+	host, err := root.resolveFollow(p)
+	if err != nil {
+		return nil, err
+	}
+	if root.isHost() {
+		return readBounded(host, limit)
+	}
+	if testHookRootedFileResolved != nil {
+		testHookRootedFileResolved(host)
+	}
+	return readBoundedNoSymlinks(host, limit)
 }
 
 // readBounded reads the regular file at p, failing if it is larger than

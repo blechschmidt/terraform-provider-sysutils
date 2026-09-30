@@ -105,8 +105,10 @@ type providerData struct {
 	host         *hostConfig
 	// root is the directory that the paths of the file, file line, template
 	// file, directory, symlink, archive extract, cron job, sudoers, package repository, timezone, hostname, locale and swap resources and the file and
-	// directory data sources are confined to, and that the host data source
-	// reads os-release and looks for package managers in; see rootfs.go.
+	// directory data sources are confined to, that the host data source
+	// reads os-release and looks for package managers in, and that the
+	// mount and sysctl data sources read fstab and sysctl configuration
+	// below; see rootfs.go.
 	root *fsRoot
 }
 
@@ -137,6 +139,7 @@ func (p *sysutilsProvider) Schema(_ context.Context, _ provider.SchemaRequest, r
 					"Use it to build a container or OS image root filesystem tree. " +
 					"Applies to the `sysutils_file`, `sysutils_file_line`, `sysutils_ini_value`, `sysutils_hosts_entry`, `sysutils_template_file`, `sysutils_directory`, `sysutils_symlink`, `sysutils_archive_extract` (its `destination`), `sysutils_cron_job`, `sysutils_sudoers`, `sysutils_package_repository`, `sysutils_timezone`, `sysutils_hostname` (which then only writes files and leaves the kernel hostname alone), `sysutils_locale` and `sysutils_swap` resources and the `sysutils_file` and `sysutils_directory` data sources. " +
 					"The `sysutils_host` data source reads `os-release` and looks for the package manager below it, but reports the running host's kernel, names, hardware, init system and firewall. " +
+					"The `sysutils_mount` data source reads `/etc/fstab` below it and reports only the mounts below it, with paths relative to it, and the `sysutils_sysctl` data source reads the sysctl configuration files below it and leaves the running kernel's values null. " +
 					"`sysutils_mount`, `sysutils_sysctl`, `sysutils_kernel_module`, `sysutils_service`, `sysutils_package`, `sysutils_ssh_authorized_key`, `sysutils_firewall_rule` and `sysutils_alternatives` change the running host and refuse to plan when `root_dir` is set, as does `sysutils_package_repository` with `refresh_cache = true`, `sysutils_locale` with `generate = true` and `sysutils_swap` with `enabled = true` or a block device. " +
 					"`path` attributes, ids and import ids keep the path inside the root. " +
 					"Symlinks inside the root are resolved as they would be in a chroot: absolute link targets are relative to `root_dir`, and a link that leads above `root_dir` is an error, so no symlink in the tree can make the provider act outside it. " +
@@ -314,5 +317,7 @@ func (p *sysutilsProvider) DataSources(_ context.Context) []func() datasource.Da
 		NewHostDataSource,
 		NewPackageDataSource,
 		NewServiceDataSource,
+		NewMountDataSource,
+		NewSysctlDataSource,
 	}
 }

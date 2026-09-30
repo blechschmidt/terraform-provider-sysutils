@@ -12,6 +12,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"syscall"
 
@@ -72,6 +73,12 @@ func sysctlNameChar(c byte) bool {
 // empty, ".", or "..", and consist of a small set of characters that
 // excludes the path separator.
 func sysctlComponents(name string) ([]string, error) {
+	return sysctlComponentsMin(name, 2)
+}
+
+// sysctlComponentsMin is sysctlComponents for keys with at least min
+// components; a prefix such as "vm" names a whole group with one.
+func sysctlComponentsMin(name string, min int) ([]string, error) {
 	if name == "" {
 		return nil, errors.New("name must not be empty")
 	}
@@ -84,7 +91,7 @@ func sysctlComponents(name string) ([]string, error) {
 		}
 	}
 	parts := strings.Split(name, ".")
-	if len(parts) < 2 {
+	if len(parts) < min {
 		return nil, fmt.Errorf("name %q must be in dotted form with at least two components, such as \"net.ipv4.ip_forward\"", name)
 	}
 	if strings.Contains(parts[0], "/") {
@@ -110,6 +117,13 @@ func sysctlComponents(name string) ([]string, error) {
 // validateSysctlName reports why name is not an acceptable sysctl key.
 func validateSysctlName(name string) error {
 	_, err := sysctlComponents(name)
+	return err
+}
+
+// validateSysctlPrefix reports why prefix does not name a group of kernel
+// parameters, such as "vm" or "net.ipv4.conf.all".
+func validateSysctlPrefix(prefix string) error {
+	_, err := sysctlComponentsMin(prefix, 1)
 	return err
 }
 
@@ -164,11 +178,29 @@ func openSysctl(root, name string, flag int) (*os.File, error) {
 	if err != nil {
 		return nil, err
 	}
+	f, info, err := openSysctlPath(root, name, parts, flag)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		_ = f.Close()
+		if info.IsDir() {
+			return nil, fmt.Errorf("%s is a group of kernel parameters, not a single parameter", name)
+		}
+		return nil, fmt.Errorf("%s is not a regular file", f.Name())
+	}
+	return f, nil
+}
+
+// openSysctlPath opens the file or directory of the components parts of
+// the key name below root, resolved with RESOLVE_BENEATH and without
+// following symlinks where the kernel supports openat2(2).
+func openSysctlPath(root, name string, parts []string, flag int) (*os.File, fs.FileInfo, error) {
 	rel := filepath.Join(parts...)
 	display := filepath.Join(root, rel)
 	dirfd, err := unix.Open(root, unix.O_PATH|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
 	if err != nil {
-		return nil, fmt.Errorf("opening %s: %w", root, err)
+		return nil, nil, fmt.Errorf("opening %s: %w", root, err)
 	}
 	defer func() { _ = unix.Close(dirfd) }()
 
@@ -183,24 +215,17 @@ func openSysctl(root, name string, flag int) (*os.File, error) {
 	}
 	switch {
 	case errors.Is(err, unix.ENOENT), errors.Is(err, unix.ENOTDIR):
-		return nil, fmt.Errorf("%s: %w", name, errSysctlNotFound)
+		return nil, nil, fmt.Errorf("%s: %w", name, errSysctlNotFound)
 	case err != nil:
-		return nil, fmt.Errorf("opening %s: %w", display, err)
+		return nil, nil, fmt.Errorf("opening %s: %w", display, err)
 	}
 	f := os.NewFile(uintptr(fd), display)
 	info, err := f.Stat()
 	if err != nil {
 		_ = f.Close()
-		return nil, err
+		return nil, nil, err
 	}
-	if !info.Mode().IsRegular() {
-		_ = f.Close()
-		if info.IsDir() {
-			return nil, fmt.Errorf("%s is a group of kernel parameters, not a single parameter", name)
-		}
-		return nil, fmt.Errorf("%s is not a regular file", display)
-	}
-	return f, nil
+	return f, info, nil
 }
 
 // readSysctl returns the current value of the kernel parameter name, with
@@ -211,6 +236,12 @@ func readSysctl(root, name string) (string, error) {
 		return "", sysctlAccessError(name, "reading", err)
 	}
 	defer func() { _ = f.Close() }()
+	return readSysctlFD(f, name)
+}
+
+// readSysctlFD reads the value of the open parameter file f, as readSysctl
+// does.
+func readSysctlFD(f *os.File, name string) (string, error) {
 	data, err := io.ReadAll(io.LimitReader(f, maxSysctlValueLen+1))
 	if err != nil {
 		return "", sysctlAccessError(name, "reading", err)
@@ -219,6 +250,142 @@ func readSysctl(root, name string) (string, error) {
 		return "", fmt.Errorf("value of %s is longer than %d bytes", name, maxSysctlValueLen)
 	}
 	return normalizeSysctlValue(string(data)), nil
+}
+
+// listSysctl returns the values of every kernel parameter at or below the
+// key prefix, which may name a group such as "net.ipv4.conf.all" or a single
+// parameter, like "sysctl -a" restricted to it. Parameters that cannot be
+// read, such as write-only ones or net.ipv6.conf.*.stable_secret while it
+// is unset, are left out, as are other file systems mounted inside /proc/sys
+// (binfmt_misc). A prefix that does not exist yields errSysctlNotFound.
+func listSysctl(root, prefix string) (map[string]string, error) {
+	parts, err := sysctlComponentsMin(prefix, 1)
+	if err != nil {
+		return nil, err
+	}
+	f, info, err := openSysctlPath(root, prefix, parts, unix.O_RDONLY)
+	if err != nil {
+		return nil, sysctlAccessError(prefix, "reading", err)
+	}
+	defer func() { _ = f.Close() }()
+	values := map[string]string{}
+	if info.Mode().IsRegular() {
+		if v, err := readSysctlFD(f, prefix); err == nil {
+			values[prefix] = v
+		}
+		return values, nil
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("%s is neither a kernel parameter nor a group of them", f.Name())
+	}
+	st, ok := info.Sys().(*syscall.Stat_t)
+	if !ok {
+		return nil, fmt.Errorf("cannot determine the file system of %s", f.Name())
+	}
+	w := sysctlWalker{dev: uint64(st.Dev), values: values} //nolint:unconvert // Dev is not uint64 on every platform.
+	if err := w.walk(f, prefix, 0); err != nil {
+		return nil, err
+	}
+	return values, nil
+}
+
+const (
+	// maxSysctlDepth bounds how deep listSysctl descends below /proc/sys.
+	// The deepest keys, such as net.ipv4.conf.<if>.<param> or
+	// net.netfilter.nf_log.<n>, are about six levels deep.
+	maxSysctlDepth = 16
+	// maxSysctlEntries bounds how many parameters listSysctl returns. A host
+	// with many network interfaces has tens of thousands.
+	maxSysctlEntries = 1 << 20
+)
+
+// sysctlWalker collects parameter values below a directory of /proc/sys.
+type sysctlWalker struct {
+	dev    uint64
+	values map[string]string
+}
+
+// walk reads the parameters in the open directory dir, whose key is key,
+// and descends into its subdirectories.
+func (w *sysctlWalker) walk(dir *os.File, key string, depth int) error {
+	if depth > maxSysctlDepth {
+		return fmt.Errorf("%s: groups of kernel parameters nested more than %d levels deep", dir.Name(), maxSysctlDepth)
+	}
+	names, err := dir.Readdirnames(-1)
+	if err != nil {
+		return fmt.Errorf("listing %s: %w", dir.Name(), err)
+	}
+	slices.Sort(names)
+	for _, name := range names {
+		child, ok := sysctlKeyComponent(name)
+		if !ok {
+			continue // Cannot be named by a key; never the case in /proc/sys.
+		}
+		childKey := key + "." + child
+		// Check the type first, without triggering an automount: binfmt_misc
+		// is often an autofs mount point inside /proc/sys.
+		var st unix.Stat_t
+		if err := unix.Fstatat(int(dir.Fd()), name, &st, unix.AT_SYMLINK_NOFOLLOW|unix.AT_NO_AUTOMOUNT); err != nil {
+			continue
+		}
+		switch st.Mode & unix.S_IFMT {
+		case unix.S_IFREG:
+		case unix.S_IFDIR:
+			if uint64(st.Dev) != w.dev { //nolint:unconvert // Dev is not uint64 on every platform.
+				continue // Another file system, such as binfmt_misc.
+			}
+		default:
+			continue // A symlink, FIFO or device; never the case in /proc/sys.
+		}
+		fd, err := unix.Openat(int(dir.Fd()), name, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
+		if err != nil {
+			continue // Write-only, gone, or a symlink.
+		}
+		f := os.NewFile(uintptr(fd), filepath.Join(dir.Name(), name))
+		err = w.visit(f, childKey, depth)
+		_ = f.Close()
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (w *sysctlWalker) visit(f *os.File, key string, depth int) error {
+	info, err := f.Stat()
+	if err != nil {
+		return nil
+	}
+	switch {
+	case info.Mode().IsRegular():
+		if len(w.values) >= maxSysctlEntries {
+			return fmt.Errorf("more than %d kernel parameters below the prefix; use a longer one", maxSysctlEntries)
+		}
+		if v, err := readSysctlFD(f, key); err == nil {
+			w.values[key] = v
+		}
+	case info.IsDir():
+		if st, ok := info.Sys().(*syscall.Stat_t); !ok || uint64(st.Dev) != w.dev { //nolint:unconvert // Dev is not uint64 on every platform.
+			return nil // Another file system, such as binfmt_misc.
+		}
+		return w.walk(f, key, depth+1)
+	}
+	return nil
+}
+
+// sysctlKeyComponent returns the key component for the file name name
+// below /proc/sys: a "." in it, as in the interface name "eth0.100", is
+// written "/" in keys (see sysctlComponents).
+func sysctlKeyComponent(name string) (string, bool) {
+	if name == "" || name == "." || name == ".." {
+		return "", false
+	}
+	for i := 0; i < len(name); i++ {
+		if !sysctlNameChar(name[i]) || name[i] == '/' {
+			return "", false
+		}
+	}
+	return strings.ReplaceAll(name, ".", "/"), true
 }
 
 // writeSysctl sets the kernel parameter name to value with a single write,
@@ -386,4 +553,100 @@ func editSysctlFile(p string, edit func(t *textFile) bool) error {
 		return removeManagedFile(p, snap)
 	}
 	return writeManagedFile(p, t.bytes(), snap, sysctlFileCreateMode)
+}
+
+// sysctlConfDirs are the directories that systemd-sysctl and
+// "sysctl --system" read *.conf files from at boot, in order of precedence:
+// of several files with the same name, only the one in the earliest
+// directory is read.
+var sysctlConfDirs = []string{"/etc/sysctl.d", "/run/sysctl.d", "/usr/local/lib/sysctl.d", "/usr/lib/sysctl.d", "/lib/sysctl.d"}
+
+// sysctlConfFile is read after the sysctl.d files by "sysctl --system".
+const sysctlConfFile = "/etc/sysctl.conf"
+
+// persistedSysctl is the value a key is set to at boot, and the file of the
+// assignment that takes effect.
+type persistedSysctl struct {
+	value, file string
+}
+
+// sysctlConfFiles returns the configuration files below root that set
+// kernel parameters at boot, in the order they are applied: the *.conf
+// files of sysctlConfDirs sorted by name, each name taken from the earliest
+// directory that has it, and then sysctlConfFile.
+func sysctlConfFiles(root *fsRoot) ([]string, error) {
+	byName := map[string]string{}
+	for _, dir := range sysctlConfDirs {
+		host, err := root.resolveFollow(dir)
+		if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		entries, err := os.ReadDir(host)
+		if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		for _, e := range entries {
+			name := e.Name()
+			if strings.HasPrefix(name, ".") || !strings.HasSuffix(name, ".conf") {
+				continue
+			}
+			if _, ok := byName[name]; !ok {
+				byName[name] = filepath.Join(dir, name)
+			}
+		}
+	}
+	names := make([]string, 0, len(byName))
+	for name := range byName {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	files := make([]string, 0, len(names)+1)
+	for _, name := range names {
+		files = append(files, byName[name])
+	}
+	return append(files, sysctlConfFile), nil
+}
+
+// readPersistedSysctl returns, for every key the configuration files below
+// root assign, the value it is set to at boot. As with systemd-sysctl and
+// sysctl(8), the last assignment wins. Values have their white space
+// normalized. A file that is not a regular file, such as a sysctl.d file
+// masked by a symlink to /dev/null, sets nothing.
+func readPersistedSysctl(root *fsRoot) (map[string]persistedSysctl, error) {
+	files, err := sysctlConfFiles(root)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]persistedSysctl{}
+	for _, p := range files {
+		host, err := root.resolveFollow(p)
+		if err == nil {
+			var info fs.FileInfo
+			if info, err = os.Stat(host); err == nil && !info.Mode().IsRegular() {
+				continue
+			}
+		}
+		var data []byte
+		if err == nil {
+			data, err = readRootedFile(root, p, maxSysctlFileSize)
+		}
+		if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
+			continue
+		}
+		if err != nil {
+			return nil, fmt.Errorf("reading %s: %w", p, err)
+		}
+		for _, line := range parseTextFile(data).lines {
+			if e, ok := parseSysctlLine(line); ok {
+				out[e.key] = persistedSysctl{value: normalizeSysctlValue(e.value), file: p}
+			}
+		}
+	}
+	return out, nil
 }
