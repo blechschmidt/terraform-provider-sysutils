@@ -2,7 +2,13 @@
 
 All notable changes to this provider are listed here. Versions follow [semantic versioning](https://semver.org/). The resource and data source pages under [`docs/`](./docs) describe each feature in full.
 
-## Unreleased
+## 1.2.0 (2026-09-30)
+
+Four new resources and four new data sources, all new since v1.1.0. The resources and data sources of v1.1.0 are unchanged apart from clearer errors for files with the immutable or append-only flag (see Improvements).
+
+### Upgrading from v1.1.0
+
+State written by v1.1.0 keeps working: no schema of an existing resource changed, and after upgrading, the first `terraform plan` of an unchanged configuration is empty. The [upgrade tests](./README.md#upgrade-tests) check this for every resource.
 
 ### New resources
 
@@ -13,15 +19,14 @@ All notable changes to this provider are listed here. Versions follow [semantic 
 
 ### New data sources
 
-- [`sysutils_package`](./docs/data-sources/package.md) reads whether an OS package is installed, its `version` and `architecture`, and the `available_version` the local package index offers (apt's candidate, or the newest version in the repositories with dnf, yum and apk), with the backends and detection of the `sysutils_package` resource. It only runs read-only queries and needs no root; dnf and yum query their metadata in cache-only mode, so that it isn't downloaded when it has expired. `refresh_cache = true` refreshes the index first, taking the provider's package-manager lock, at most once per provider run.
-- [`sysutils_service`](./docs/data-sources/service.md) reads whether a service `exists`, is `enabled` and is `running`, its primary `unit` name and the init system's own `enabled_state` and `active_state`, with the systemd and OpenRC backends of the `sysutils_service` resource. It needs no root. Where neither systemd nor OpenRC runs, as in most containers or with SysV init, it still succeeds: `init_system` reports what runs (`sysvinit` or null), `supported` is false and the service attributes are null.
-- Both refuse to read when the provider's `root_dir` is set, since they describe the running host.
+- [`sysutils_package`](./docs/data-sources/package.md) reads whether an OS package is installed, its `version` and `architecture`, and the `available_version` the local package index offers (apt's candidate, or the newest version in the repositories with dnf, yum and apk), with the backends and detection of the `sysutils_package` resource. It only runs read-only queries and needs no root; dnf and yum query their metadata in cache-only mode, so that it isn't downloaded when it has expired. `refresh_cache = true` refreshes the index first, taking the provider's package-manager lock, at most once per provider run. It refuses to read when the provider's `root_dir` is set, since it describes the running host.
+- [`sysutils_service`](./docs/data-sources/service.md) reads whether a service `exists`, is `enabled` and is `running`, its primary `unit` name and the init system's own `enabled_state` and `active_state`, with the systemd and OpenRC backends of the `sysutils_service` resource. It needs no root. Where neither systemd nor OpenRC runs, as in most containers or with SysV init, it still succeeds: `init_system` reports what runs (`sysvinit` or null), `supported` is false and the service attributes are null. Like `sysutils_package`, it refuses to read when `root_dir` is set.
 - [`sysutils_mount`](./docs/data-sources/mount.md) looks up a mount point in `/proc/self/mountinfo` (`mounted`, `source`, `fstype`, `options`, `super_options`, `read_only`) and its `/etc/fstab` entry (`in_fstab`, `fstab_device`, `fstab_fstype`, `fstab_options`; skipped with `fstab = false`), with the parsers of the `sysutils_mount` resource. Without `path`, it lists every mount in `mounts`, optionally only those whose type is in `fstypes`. With `root_dir`, it sees what a process chrooted there would: `/etc/fstab` below `root_dir`, and only the mounts at or below it, with paths relative to it. It never touches the mount points themselves, so a hung network file system cannot block it.
 - [`sysutils_sysctl`](./docs/data-sources/sysctl.md) reads one kernel parameter (`name`: `exists`, `value`) or every readable parameter below a key prefix (`prefix`: `values`) from `/proc/sys`, without following symlinks and without descending into other file systems such as `binfmt_misc`. It also reports the value set at boot (`persisted_value` and `persisted_file`, or `persisted_values`) from the files `systemd-sysctl` and `sysctl --system` apply, with their precedence rules: `*.conf` in `/etc`, `/run`, `/usr/local/lib`, `/usr/lib` and `/lib` `sysctl.d`, masking by name and `/dev/null`, then `/etc/sysctl.conf`, last assignment wins. With `root_dir`, the files are read below it and the running kernel's values are null. It shares key validation, `/proc/sys` access and file parsing with the `sysutils_sysctl` resource.
 
 ### Security
 
-These fix issues found in review in the features above, before their first release.
+These fix issues found in the security reviews of the features above, before their first release, so no released version is affected.
 
 - `sysutils_remote_file` refuses redirects to another host that lead to a loopback address (including `0.0.0.0`), a link-local address or a cloud metadata service such as `169.254.169.254`, unless `url`'s own host is one of the same kind. The check applies to the address connected to, after DNS resolution, so DNS rebinding does not bypass it. A malicious or compromised download server could otherwise make the provider fetch the instance's cloud credentials and, with `allow_unverified`, save them to `path`.
 - `sysutils_remote_file` no longer sends a `Referer` header on redirects, which carried `url` including any token in its query to the redirect target.
@@ -30,15 +35,12 @@ These fix issues found in review in the features above, before their first relea
 - `sysutils_file_attributes` below `root_dir` opens its path without following symlinks in any component, so a directory in the tree swapped for a symlink after the path was resolved can no longer make it set flags such as `i` on a file of the host.
 - `sysutils_sysctl` (data source) leaves parameters only root may read, such as `net.ipv4.tcp_fastopen_key` and `net.ipv6.conf.*.stable_secret`, out of `values`, so that a `prefix` lookup does not copy these secrets into the state.
 - `sysutils_mount` (data source) replaces the values of the `password`, `password2`, `pass`, `passwd` and `secret` mount options, as in a cifs entry of `/etc/fstab`, by `(redacted)`.
+- `sysutils_limits` now reads limits files the way `pam_limits` does. `pam_limits` lowercases the type, item and value of an entry, so `postgres SOFT NOFILE 999999` is the same entry as `postgres soft nofile 1024`. The provider compared them case-sensitively: an upper-case entry written after the managed one overrode it without showing up as drift, create didn't refuse to take it over, and apply left it in place. Such entries are now found, reported as drift and replaced, and `UNLIMITED` counts as `unlimited`. Fields are now split on ASCII white space only, as `pam_limits` splits them, so a line with a Unicode space such as U+00A0, which `pam_limits` skips, is no longer taken for an entry that shadows or replaces the managed one.
+- The `sysutils_file_acl` documentation now warns that an ACL applies to every hard link of a file, and that symlinks in the parent directories of `path` are followed.
 
 ### Improvements
 
 - Writing, `chmod`ing, `chown`ing, replacing or removing a file or directory with the immutable (`i`) or append-only (`a`) inode flag, or an entry of a directory with one, fails with "operation not permitted", even as root. `sysutils_file`, `sysutils_template_file`, `sysutils_remote_file`, `sysutils_directory`, `sysutils_symlink`, `sysutils_systemd_unit`, `sysutils_file_acl` and every resource that edits or writes a configuration file now say in that error which path has which flag and how to clear it. The documentation of `sysutils_file` and the provider's security model describe the limitation.
-
-### Fixes from the security review of the new resources and data sources
-
-- `sysutils_limits` now reads limits files the way `pam_limits` does. `pam_limits` lowercases the type, item and value of an entry, so `postgres SOFT NOFILE 999999` is the same entry as `postgres soft nofile 1024`. The provider compared them case-sensitively: an upper-case entry written after the managed one overrode it without showing up as drift, create didn't refuse to take it over, and apply left it in place. Such entries are now found, reported as drift and replaced, and `UNLIMITED` counts as `unlimited`. Fields are now split on ASCII white space only, as `pam_limits` splits them, so a line with a Unicode space such as U+00A0, which `pam_limits` skips, is no longer taken for an entry that shadows or replaces the managed one.
-- The `sysutils_file_acl` documentation now warns that an ACL applies to every hard link of a file, and that symlinks in the parent directories of `path` are followed.
 
 ### Tests
 

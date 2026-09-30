@@ -46,6 +46,16 @@ jobs:
             echo "GOARCH=$arch"
             GOOS=linux GOARCH=$arch go vet ./...
           done
+      # The release notes are the CHANGELOG.md section of the tagged version,
+      # with relative links pointing at the tag. A tag without a changelog
+      # section fails here, before anything is published.
+      - name: Release notes
+        env:
+          TAG: ${{ github.ref_name }}
+          BLOB_URL: ${{ github.server_url }}/${{ github.repository }}/blob/${{ github.ref_name }}/
+        run: |
+          scripts/release-notes.sh "$TAG" | sed "s#](\./#](${BLOB_URL}#g" > "$RUNNER_TEMP/release-notes.md"
+          cat "$RUNNER_TEMP/release-notes.md"
       - name: Import GPG key
         uses: crazy-max/ghaction-import-gpg@e89d40939c28e39f97cf32126055eeae86ba74ec # v6.3.0
         id: import_gpg
@@ -61,7 +71,7 @@ jobs:
         uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6.4.0
         with:
           version: v2.14.3
-          args: release --clean
+          args: release --clean --release-notes=${{ runner.temp }}/release-notes.md
         env:
           # GitHub sets the GITHUB_TOKEN secret automatically.
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

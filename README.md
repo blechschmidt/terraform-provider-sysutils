@@ -316,8 +316,8 @@ The files that examples read with `file()` or `filebase64()` must exist, since `
 Changes are recorded in [CHANGELOG.md](./CHANGELOG.md). To release:
 
 1. Move the entries under **Unreleased** in `CHANGELOG.md` to a section for the new version and merge that to `main`.
-2. Tag the commit on `main` with the version, prefixed with `v`, and push the tag: `git tag v1.1.0 && git push origin v1.1.0`.
-3. The `release` workflow (`.github/workflows/release.yaml`) runs on every pushed `v*` tag. It runs the unit tests, vets the provider for every release architecture, imports the signing key, runs `goreleaser check` and then `goreleaser release --clean` with the configuration in `.goreleaser.yml`, which publishes a GitHub release in the layout the [Terraform Registry expects](https://developer.hashicorp.com/terraform/registry/providers/publishing):
+2. Tag the commit on `main` with the version, prefixed with `v`, and push the tag: `git tag v1.2.0 && git push origin v1.2.0`.
+3. The `release` workflow (`.github/workflows/release.yaml`) runs on every pushed `v*` tag. It runs the unit tests, vets the provider for every release architecture, takes the release notes from the version's `CHANGELOG.md` section with `scripts/release-notes.sh` (and fails if there is none), imports the signing key, runs `goreleaser check` and then `goreleaser release --clean` with the configuration in `.goreleaser.yml`, which publishes a GitHub release in the layout the [Terraform Registry expects](https://developer.hashicorp.com/terraform/registry/providers/publishing):
    - `terraform-provider-sysutils_<version>_linux_<arch>.zip` for `amd64`, `arm64`, `386` and `arm` (ARMv6), each with the binary `terraform-provider-sysutils_v<version>`, `LICENSE` and `README.md`;
    - `terraform-provider-sysutils_<version>_manifest.json`, a copy of `terraform-registry-manifest.json`, which declares plugin protocol version 6.0;
    - `terraform-provider-sysutils_<version>_SHA256SUMS`, the SHA-256 sums of the zips and the manifest, and its detached GPG signature `terraform-provider-sysutils_<version>_SHA256SUMS.sig`.
