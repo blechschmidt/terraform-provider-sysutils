@@ -12,6 +12,8 @@ description: |-
 
 `sysutils_service` complements [`sysutils_systemd_unit`](./systemd_unit.md), which manages unit files that you write yourself: use `sysutils_service` for services that a package installed, for services on OpenRC hosts, and to restart a service when its configuration files change.
 
+On Terraform 1.14 and later, the [`sysutils_service` action](../actions/service.md) is an alternative to `restart_on_change`: invoked from the `action_trigger` of the resource that writes the configuration, it restarts or reloads the service right after the file is written, including when it is first created. `restart_on_change` works with every Terraform and OpenTofu version.
+
 ## Example Usage
 
 {{ tffile "examples/resources/sysutils_service/resource.tf" }}

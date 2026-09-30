@@ -46,9 +46,10 @@ read -r -a images <<<"${*:-${DISTROS:-debian:stable alpine:latest fedora:latest}
 # tests run on the container's overlayfs (there are no loop devices for an
 # ext4 image), which has inode flags only on kernels >= 5.15. Tests gated on
 # the Terraform CLI version (provider functions need 1.8, write-only
-# attributes 1.11, and the check that older CLIs reject them needs <= 1.10)
-# skip on the CLIs outside their range, and some tests on OpenTofu releases
-# with known bugs.
+# attributes 1.11, actions 1.14, and the check that older CLIs reject
+# write-only attributes needs <= 1.10) skip on the CLIs outside their range,
+# the action tests on OpenTofu, which has no actions, and some tests on
+# OpenTofu releases with known bugs.
 common_skips='Terraform CLI version [^ ]+ is (below minimum|above maximum) version|OpenTofu [^ ]+ is skipped: |the file system of [^ ]+ does not support inode flags|the su PAM session does not use pam_limits on this host|systemd is not PID 1|is not in any release yet|CAP_SYS_MODULE is not in the effective capability set|the kernel does not allow setting [^ ]+ here|swapon is not permitted here|SYSUTILS_UPGRADE_FROM_REF is not set'
 
 # allowed_skips IMAGE prints the skip reasons allowed on IMAGE on top of

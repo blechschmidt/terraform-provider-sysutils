@@ -45,6 +45,8 @@ type fakeService struct {
 	running    bool
 	// runlevels lists the OpenRC runlevels the service is in.
 	runlevels []string
+	// reloads counts successful reloads.
+	reloads int
 }
 
 func newFakeInit(t *testing.T, kind string) *fakeInit {
@@ -125,7 +127,7 @@ func (f *fakeInit) changes() []string {
 	var out []string
 	for _, c := range f.calls {
 		switch {
-		case c[0] == "systemctl" && slices.Contains([]string{"enable", "disable", "start", "stop", "restart"}, c[1]):
+		case c[0] == "systemctl" && slices.Contains([]string{"enable", "disable", "start", "stop", "restart", "reload"}, c[1]):
 			out = append(out, c[1]+" "+c[len(c)-1])
 		case c[0] == "systemctl" && c[1] == "daemon-reload":
 			out = append(out, "daemon-reload")
@@ -269,6 +271,11 @@ func (f *fakeInit) systemctl(args []string, out fakeOut) (*execResult, error) {
 		s.running = !s.exits
 	case "stop":
 		s.running = false
+	case "reload":
+		if !s.running {
+			return out(1, "", fmt.Sprintf("Job for %s failed.\nUnit %s is not active.\n", name, name))
+		}
+		s.reloads++
 	default:
 		return out(1, "", fmt.Sprintf("fake systemctl: unsupported command %q\n", args))
 	}
@@ -348,6 +355,11 @@ func (f *fakeInit) openrc(args []string, out fakeOut) (*execResult, error) {
 			return out(1, "", fmt.Sprintf(" * ERROR: %s failed to start\n", name))
 		}
 		s.running = !s.exits
+	case "reload":
+		if !s.running {
+			return out(1, "", fmt.Sprintf(" * ERROR: %s has not yet been started\n", name))
+		}
+		s.reloads++
 	default:
 		return out(1, "", " * rc-service: unsupported command "+verb+"\n")
 	}

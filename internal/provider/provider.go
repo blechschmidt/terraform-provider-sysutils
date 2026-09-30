@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/hashicorp/terraform-plugin-framework/action"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
 	"github.com/hashicorp/terraform-plugin-framework/ephemeral"
@@ -142,7 +143,7 @@ func (p *sysutilsProvider) Schema(_ context.Context, _ provider.SchemaRequest, r
 					"Applies to the `sysutils_file`, `sysutils_file_line`, `sysutils_ini_value`, `sysutils_hosts_entry`, `sysutils_template_file`, `sysutils_directory`, `sysutils_symlink`, `sysutils_archive_extract` (its `destination`), `sysutils_cron_job`, `sysutils_sudoers`, `sysutils_package_repository`, `sysutils_timezone`, `sysutils_hostname` (which then only writes files and leaves the kernel hostname alone), `sysutils_locale` and `sysutils_swap` resources, the `sysutils_file` and `sysutils_directory` data sources and the `sysutils_file` ephemeral resource. " +
 					"The `sysutils_host` data source reads `os-release` and looks for the package manager below it, but reports the running host's kernel, names, hardware, init system and firewall. " +
 					"The `sysutils_mount` data source reads `/etc/fstab` below it and reports only the mounts below it, with paths relative to it, and the `sysutils_sysctl` data source reads the sysctl configuration files below it and leaves the running kernel's values null. " +
-					"`sysutils_mount`, `sysutils_sysctl`, `sysutils_kernel_module`, `sysutils_service`, `sysutils_package`, `sysutils_ssh_authorized_key`, `sysutils_firewall_rule` and `sysutils_alternatives` change the running host and refuse to plan when `root_dir` is set, as does `sysutils_package_repository` with `refresh_cache = true`, `sysutils_locale` with `generate = true` and `sysutils_swap` with `enabled = true` or a block device. " +
+					"`sysutils_mount`, `sysutils_sysctl`, `sysutils_kernel_module`, `sysutils_service`, `sysutils_package`, `sysutils_ssh_authorized_key`, `sysutils_firewall_rule`, `sysutils_alternatives` and the `sysutils_service` and `sysutils_systemd_daemon_reload` actions change the running host and refuse to plan when `root_dir` is set, as does `sysutils_package_repository` with `refresh_cache = true`, `sysutils_locale` with `generate = true` and `sysutils_swap` with `enabled = true` or a block device. " +
 					"`path` attributes, ids and import ids keep the path inside the root. " +
 					"Symlinks inside the root are resolved as they would be in a chroot: absolute link targets are relative to `root_dir`, and a link that leads above `root_dir` is an error, so no symlink in the tree can make the provider act outside it. " +
 					"Must be an absolute path in canonical form; symlinks in `root_dir` itself are followed. It must exist when a resource or data source is read or applied. " +
@@ -178,6 +179,7 @@ func (p *sysutilsProvider) Configure(ctx context.Context, req provider.Configure
 	resp.ResourceData = data
 	resp.DataSourceData = data
 	resp.EphemeralResourceData = data
+	resp.ActionData = data
 }
 
 // providerDataFrom converts the value passed to Configure of a resource or
@@ -329,6 +331,17 @@ func (p *sysutilsProvider) EphemeralResources(_ context.Context) []func() epheme
 }
 
 var _ provider.ProviderWithEphemeralResources = (*sysutilsProvider)(nil)
+
+// Actions implements provider.ProviderWithActions. Terraform before 1.14
+// and OpenTofu ignore them.
+func (p *sysutilsProvider) Actions(_ context.Context) []func() action.Action {
+	return []func() action.Action{
+		NewServiceAction,
+		NewSystemdDaemonReloadAction,
+	}
+}
+
+var _ provider.ProviderWithActions = (*sysutilsProvider)(nil)
 
 func (p *sysutilsProvider) DataSources(_ context.Context) []func() datasource.DataSource {
 	return []func() datasource.DataSource{

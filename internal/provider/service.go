@@ -140,6 +140,9 @@ type serviceManager interface {
 	SetRunning(ctx context.Context, unit string, run bool) error
 	// Restart restarts unit, starting it if it is stopped.
 	Restart(ctx context.Context, unit string) error
+	// Reload asks the running unit to reload its configuration without
+	// restarting. It fails if the unit is not running or cannot reload.
+	Reload(ctx context.Context, unit string) error
 	// EnableHint and StartHint explain why enabling or starting a service
 	// may appear to succeed without effect.
 	EnableHint(unit string) string
@@ -313,6 +316,15 @@ func (s systemdServices) Restart(ctx context.Context, unit string) error {
 	return s.sc.do(ctx, "restart", "--", unit)
 }
 
+// Reload runs "systemctl reload", after a daemon-reload if the unit's file
+// changed, so that a changed ExecReload= takes effect.
+func (s systemdServices) Reload(ctx context.Context, unit string) error {
+	if err := s.reloadIfNeeded(ctx, unit); err != nil {
+		return err
+	}
+	return s.sc.do(ctx, "reload", "--", unit)
+}
+
 // reloadIfNeeded runs daemon-reload if systemd reports that the unit's
 // file or drop-ins changed since it loaded them, so that start uses the
 // current configuration.
@@ -469,6 +481,12 @@ func (o openrcServices) SetRunning(ctx context.Context, unit string, run bool) e
 
 func (o openrcServices) Restart(ctx context.Context, unit string) error {
 	return o.do(ctx, "rc-service", "--", unit, "restart")
+}
+
+// Reload runs the init script's reload command, which OpenRC only offers
+// for scripts that define one and only while the service is started.
+func (o openrcServices) Reload(ctx context.Context, unit string) error {
+	return o.do(ctx, "rc-service", "--", unit, "reload")
 }
 
 func (o openrcServices) EnableHint(string) string {

@@ -1,0 +1,57 @@
+---
+page_title: "{{.Name}} Action - terraform-provider-sysutils"
+subcategory: ""
+description: |-
+  Restarts, reloads, starts or stops a service when invoked, for example after its configuration file changed. Supports systemd and OpenRC.
+---
+
+# {{.Name}} ({{.Type}})
+
+{{ .Description | trimspace }}
+
+An [action](https://developer.hashicorp.com/terraform/language/block/action) needs Terraform 1.14 or later. OpenTofu does not support actions and rejects `action` blocks; use `restart_on_change` of the [`sysutils_service` resource](../resources/service.md) there.
+
+Terraform invokes an action when a resource's `action_trigger` fires, for example `after_create` and `after_update` of the [`sysutils_file`](../resources/file.md) holding the service's configuration, or when you run `terraform apply -invoke=action.sysutils_service.<name>`. It never runs when the triggering resource is unchanged, and it leaves nothing in the state.
+
+## Example Usage
+
+### Reload a service after its configuration changes
+
+{{ tffile "examples/actions/sysutils_service/action.tf" }}
+
+### Restart a service when one of several files changes
+
+{{ tffile "examples/actions/sysutils_service/action-restart.tf" }}
+
+### Invoking it by hand
+
+```shell
+terraform apply -invoke=action.sysutils_service.restart_app
+```
+
+This runs only the action, without planning any resource changes. Use it to retry an action that failed, or to restart a service on demand.
+
+{{ .SchemaMarkdown | trimspace }}
+
+## Behavior
+
+The init system is detected as for the [`sysutils_service` resource](../resources/service.md#init-system-detection): systemd if it booted the host, otherwise OpenRC. When a plan includes the action, the provider checks that one of them runs the host and that `name` is valid for it, so that a host without either fails the plan before anything changes. When the action runs, it checks that the service exists, and fails with `Service not found` if not.
+
+| `action` | systemd | OpenRC | Afterwards |
+|----------|---------|--------|------------|
+| `restart` | `systemctl daemon-reload`, then `systemctl restart` | `rc-service <name> restart` | The service must be running |
+| `reload` | `systemctl daemon-reload` if the unit file changed (`NeedDaemonReload`), then `systemctl reload` | `rc-service <name> reload` | Not checked; the service keeps running |
+| `start` | Nothing if the service is running; otherwise `daemon-reload` if the unit file changed, then `systemctl start` | Nothing if the service is started; otherwise `rc-service <name> start` | The service must be running |
+| `stop` | Nothing if the service is stopped; otherwise `systemctl stop` | Nothing if the service is stopped; otherwise `rc-service <name> stop` | The service must be stopped |
+
+`reload` fails with `Service not running` if the service is stopped, since there is nothing to reload; use `restart` if the service may be stopped. It also fails if the service cannot reload: with systemd, a unit needs `ExecReload=`, and with OpenRC, the init script must define a `reload` command in `extra_started_commands`.
+
+A service that stops right after `restart` or `start` fails the action with `Changing service state`. A systemd `Type=oneshot` service needs `RemainAfterExit=yes` to count as running.
+
+## Caveats
+
+- If the action fails, the triggering resource has already been changed and its new state is saved, so the next plan is empty and does not invoke the action again. Fix the cause and run `terraform apply -invoke=action.sysutils_service.<name>`.
+- The service must exist when the action runs. If the same configuration installs it, for example with [`sysutils_package`](../resources/package.md), add a `depends_on` on the package to the triggering resource, so that the file is written, and the action invoked, after the installation.
+- To keep the service's run state converged as well, combine the action with a `sysutils_service` resource that sets `state = "running"`. The action only acts when it is triggered.
+- `before_create` and `before_update` triggers work too, but they run before the file is written, so a restart would still use the old configuration.
+- The action changes the running host and is refused when the provider's `root_dir` is set. Use a separate provider configuration without `root_dir` for it.

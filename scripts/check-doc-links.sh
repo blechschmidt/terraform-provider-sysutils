@@ -10,7 +10,7 @@
 #  2. .../latest/docs/index redirects to .../latest/docs and drops the
 #     anchor, so no page may link to index.md relatively.
 #  3. Other pages may only use relative links of the forms "./page.md" and
-#     "../(resources|data-sources|ephemeral-resources|functions|guides)/page.md", each
+#     "../(resources|data-sources|ephemeral-resources|actions|functions|guides)/page.md", each
 #     optionally with an anchor, and the linked page must exist.
 set -euo pipefail
 
@@ -42,7 +42,7 @@ while IFS= read -r entry; do
 		continue
 		;;
 	esac
-	if ! [[ $path =~ ^(\./[a-z0-9_-]+|\.\./(resources|data-sources|ephemeral-resources|functions|guides)/[a-z0-9_-]+)\.md$ ]]; then
+	if ! [[ $path =~ ^(\./[a-z0-9_-]+|\.\./(resources|data-sources|ephemeral-resources|actions|functions|guides)/[a-z0-9_-]+)\.md$ ]]; then
 		echo "$file: unsupported relative link $target" >&2
 		fail=1
 		continue

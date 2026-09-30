@@ -9,6 +9,9 @@ All notable changes to this provider are listed here. Versions follow [semantic 
 - Ephemeral resources, for Terraform 1.10 and later and OpenTofu 1.11 and later. Neither their configuration nor their results are stored in the plan or the state, so they can feed secrets to write-only arguments such as `content_wo` of `sysutils_file`.
   - [`sysutils_file`](./docs/ephemeral-resources/file.md) reads a local file of at most `max_size` bytes (1 MiB by default, 16 MiB at most) and returns `content`, `content_base64` and `sha256`. It refuses a symlink at `path`, files that belong to another user or are writable by their group or others, and paths through directories that another user could change. It honours the provider's `root_dir`.
   - [`sysutils_exec`](./docs/ephemeral-resources/exec.md) runs a command with the environment, working directory, standard input and timeout (5 minutes by default) of your choice, and returns `stdout`, `stderr` and `exit_code`. More output than `max_output_bytes` is an error rather than being truncated, and failure diagnostics never quote standard output.
+- Actions, for Terraform 1.14 and later, invoked from `action_trigger` blocks or with `terraform apply -invoke`. OpenTofu has no actions.
+  - [`sysutils_service`](./docs/actions/service.md) restarts, reloads, starts or stops a service through systemd or OpenRC, for example after its configuration file changed, and checks that the service is running (or stopped) afterwards. With systemd, `restart` runs `systemctl daemon-reload` first.
+  - [`sysutils_systemd_daemon_reload`](./docs/actions/systemd_daemon_reload.md) runs `systemctl daemon-reload`, for unit files and drop-ins written by resources other than `sysutils_systemd_unit`.
 
 ## 1.3.0 (2026-09-30)
 

@@ -1,0 +1,39 @@
+---
+page_title: "{{.Name}} Action - terraform-provider-sysutils"
+subcategory: ""
+description: |-
+  Runs systemctl daemon-reload when invoked, for example after a unit file or drop-in written by sysutils_file changed.
+---
+
+# {{.Name}} ({{.Type}})
+
+{{ .Description | trimspace }}
+
+An [action](https://developer.hashicorp.com/terraform/language/block/action) needs Terraform 1.14 or later. OpenTofu does not support actions and rejects `action` blocks.
+
+The [`sysutils_systemd_unit`](../resources/systemd_unit.md) resource reloads systemd itself whenever it changes a unit file. Use this action for unit files and drop-ins that other resources write, such as [`sysutils_file`](../resources/file.md), [`sysutils_template_file`](../resources/template_file.md) or [`sysutils_ini_value`](../resources/ini_value.md). The `restart` action of [`sysutils_service`](./service.md) also reloads systemd first, so you only need this action when the unit should not be restarted, or before another action that does not reload.
+
+## Example Usage
+
+{{ tffile "examples/actions/sysutils_systemd_daemon_reload/action.tf" }}
+
+Terraform invokes the actions of one `action_trigger` in the order they are listed, and stops at the first that fails.
+
+To run it by hand:
+
+```shell
+terraform apply -invoke=action.sysutils_systemd_daemon_reload.this
+```
+
+{{ .SchemaMarkdown | trimspace }}
+
+## Behavior
+
+The action runs `systemctl daemon-reload`, which makes systemd reread every unit file and drop-in and rerun its generators, for example the one that turns `/etc/fstab` into mount units. Running services are not restarted and keep the configuration they were started with until their next restart; `systemctl show` reports the new configuration at once.
+
+When a plan includes the action, the provider checks that systemd booted the host, as the [`sysutils_service` resource](../resources/service.md#init-system-detection) detects it. On other hosts, such as Alpine Linux with OpenRC, the plan fails with `systemd is not running`. For a configuration shared between hosts with different init systems, set `condition` in the `action_trigger` block, for example to `data.sysutils_host.this.init_system == "systemd"` with the [`sysutils_host`](../data-sources/host.md) data source.
+
+## Caveats
+
+- If the action fails, the triggering resource has already been changed and its new state is saved, so the next plan does not invoke the action again. Fix the cause and run it with `-invoke`.
+- The action changes the running host and is refused when the provider's `root_dir` is set.
