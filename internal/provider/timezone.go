@@ -87,7 +87,7 @@ func (c *timezoneConfig) useTimedatectl(root *fsRoot) bool {
 	if c != nil && c.runDir != "" {
 		runDir = c.runDir
 	}
-	if fi, err := os.Stat(filepath.Join(runDir, "systemd", "system")); err != nil || !fi.IsDir() {
+	if !systemdBootedIn(runDir) {
 		return false
 	}
 	_, err := lookPath("timedatectl")

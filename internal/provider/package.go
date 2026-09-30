@@ -9,7 +9,6 @@ package provider
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -277,27 +276,17 @@ func (c *packageConfig) resolve(kind string) (packageManager, error) {
 	if lookPath == nil {
 		lookPath = exec.LookPath
 	}
-	missing := func(k string) []string {
-		var m []string
-		for _, tool := range packageManagerTools[k] {
-			if _, err := lookPath(tool); err != nil {
-				m = append(m, tool)
-			}
-		}
-		return m
-	}
 	if kind == packageManagerAuto || kind == "" {
-		for _, k := range packageManagerKinds {
-			if len(missing(k)) == 0 {
-				return newPackageBackend(k, c.runner()), nil
-			}
+		k, err := detectPackageManager(lookPath)
+		if err != nil {
+			return nil, err
 		}
-		return nil, errors.New("no supported package manager found: none of apt (apt-get, apt-cache, dpkg-query), dnf (dnf, rpm), yum (yum, rpm) or apk (apk) is installed")
+		return newPackageBackend(k, c.runner()), nil
 	}
 	if _, ok := packageManagerTools[kind]; !ok {
 		return nil, fmt.Errorf("unsupported package manager %q", kind)
 	}
-	if m := missing(kind); len(m) > 0 {
+	if m := missingTools(lookPath, packageManagerTools[kind]...); len(m) > 0 {
 		return nil, fmt.Errorf("package manager %s is not available: %s not found in PATH", kind, strings.Join(m, ", "))
 	}
 	return newPackageBackend(kind, c.runner()), nil

@@ -40,6 +40,7 @@ The provider acts on the machine Terraform runs on. It has no remote-execution m
 | [`sysutils_directory`](./docs/data-sources/directory.md) | Whether a directory exists, its mode, ownership and entry names | Only for directories you can't otherwise list |
 | [`sysutils_user`](./docs/data-sources/user.md) | A user by name or uid: uid, gid, home, shell, comment and supplementary groups | No |
 | [`sysutils_group`](./docs/data-sources/group.md) | A group by name or gid: gid and members | No |
+| [`sysutils_host`](./docs/data-sources/host.md) | Host facts for conditionals: hostname and FQDN, distribution from `os-release` (id, id_like, version, codename), kernel release, architecture, CPU count, memory, and the detected init system, package manager and firewall backend | No |
 
 Data sources are read on every plan, so they always reflect the current state of the host.
 
@@ -108,7 +109,7 @@ resource "sysutils_ssh_authorized_key" "admin" {
 
 Each guide solves a common job end to end and explains why the configuration looks the way it does. Their configurations are in [`examples/guides`](./examples/guides).
 
-- [Bootstrapping a host](./docs/guides/bootstrap-host.md): base packages and services, administrator accounts, SSH keys and sudo.
+- [Bootstrapping a host](./docs/guides/bootstrap-host.md): base packages and services, package names by distribution, administrator accounts, SSH keys and sudo.
 - [Hardening a host](./docs/guides/hardening.md): kernel parameters, disabled kernel modules, SSH settings, file modes and a permission audit.
 - [Deploying an application](./docs/guides/app-deployment.md): versioned releases from a tarball, a templated configuration, a systemd unit and restarts on change.
 - [Image trees, dry runs and parallel applies](./docs/guides/root-dir-plans-and-locking.md): `root_dir`, plans as check mode and drift report, and how the provider locks shared files.
@@ -121,7 +122,7 @@ For a whole service host in one stack, see [`examples/complete`](./examples/comp
 - [Provider overview and security model](./docs/index.md)
 - [Cookbook guides](#cookbook)
 - Resources: [`sysutils_file`](./docs/resources/file.md), [`sysutils_file_line`](./docs/resources/file_line.md), [`sysutils_ini_value`](./docs/resources/ini_value.md), [`sysutils_hosts_entry`](./docs/resources/hosts_entry.md), [`sysutils_template_file`](./docs/resources/template_file.md), [`sysutils_directory`](./docs/resources/directory.md), [`sysutils_symlink`](./docs/resources/symlink.md), [`sysutils_archive_extract`](./docs/resources/archive_extract.md), [`sysutils_user`](./docs/resources/user.md), [`sysutils_group`](./docs/resources/group.md), [`sysutils_systemd_unit`](./docs/resources/systemd_unit.md), [`sysutils_service`](./docs/resources/service.md), [`sysutils_mount`](./docs/resources/mount.md), [`sysutils_swap`](./docs/resources/swap.md), [`sysutils_sysctl`](./docs/resources/sysctl.md), [`sysutils_kernel_module`](./docs/resources/kernel_module.md), [`sysutils_timezone`](./docs/resources/timezone.md), [`sysutils_locale`](./docs/resources/locale.md), [`sysutils_ssh_authorized_key`](./docs/resources/ssh_authorized_key.md), [`sysutils_cron_job`](./docs/resources/cron_job.md), [`sysutils_firewall_rule`](./docs/resources/firewall_rule.md), [`sysutils_package`](./docs/resources/package.md), [`sysutils_package_repository`](./docs/resources/package_repository.md), [`sysutils_alternatives`](./docs/resources/alternatives.md), [`sysutils_exec`](./docs/resources/exec.md)
-- Data sources: [`sysutils_file`](./docs/data-sources/file.md), [`sysutils_directory`](./docs/data-sources/directory.md), [`sysutils_user`](./docs/data-sources/user.md), [`sysutils_group`](./docs/data-sources/group.md)
+- Data sources: [`sysutils_file`](./docs/data-sources/file.md), [`sysutils_directory`](./docs/data-sources/directory.md), [`sysutils_user`](./docs/data-sources/user.md), [`sysutils_group`](./docs/data-sources/group.md), [`sysutils_host`](./docs/data-sources/host.md)
 - [Examples](./examples), including [`examples/complete`](./examples/complete), a whole service host in one stack
 
 ## Security considerations

@@ -10,10 +10,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -149,6 +147,8 @@ type serviceConfig struct {
 	lookPath func(string) (string, error)
 	// runDir replaces /run during detection.
 	runDir string
+	// procDir replaces /proc during detection.
+	procDir string
 }
 
 func (c *serviceConfig) runner() commandRunner {
@@ -158,61 +158,67 @@ func (c *serviceConfig) runner() commandRunner {
 	return c.run
 }
 
-// detect returns the init system that manages services on this host:
-// systemd if it booted the host, as sd_booted() checks, otherwise OpenRC
-// if it booted the host, as rc-service itself checks.
-func (c *serviceConfig) detect() (string, error) {
-	lookPath, runDir := exec.LookPath, defaultRunDir
-	if c != nil && c.lookPath != nil {
-		lookPath = c.lookPath
-	}
+// probe finds the init system that booted the host; see probeInitSystem.
+func (c *serviceConfig) probe() initProbe {
+	runDir, procDir := defaultRunDir, defaultProcDir
 	if c != nil && c.runDir != "" {
 		runDir = c.runDir
 	}
-	missing := func(tools ...string) []string {
-		var m []string
-		for _, tool := range tools {
-			if _, err := lookPath(tool); err != nil {
-				m = append(m, tool)
-			}
-		}
-		return m
+	if c != nil && c.procDir != "" {
+		procDir = c.procDir
 	}
+	return probeInitSystem(runDir, procDir)
+}
 
-	systemdMarker := filepath.Join(runDir, "systemd", "system")
-	if fi, err := os.Stat(systemdMarker); err == nil && fi.IsDir() {
-		if m := missing("systemctl"); len(m) > 0 {
+func (c *serviceConfig) runDirOrDefault() string {
+	if c != nil && c.runDir != "" {
+		return c.runDir
+	}
+	return defaultRunDir
+}
+
+// detect returns the init system that manages services on this host:
+// systemd if it booted the host, as sd_booted() checks, otherwise OpenRC
+// if it booted the host, as rc-service itself checks. Its tools must be
+// installed.
+func (c *serviceConfig) detect() (string, error) {
+	lookPath := exec.LookPath
+	if c != nil && c.lookPath != nil {
+		lookPath = c.lookPath
+	}
+	p := c.probe()
+	switch p.kind {
+	case initSystemSystemd:
+		if m := missingTools(lookPath, "systemctl"); len(m) > 0 {
 			return "", errors.New("systemd is running, but systemctl was not found in PATH")
 		}
 		return initSystemSystemd, nil
-	}
-	openrcMarker := filepath.Join(runDir, "openrc", "softlevel")
-	_, openrcErr := os.Stat(openrcMarker)
-	if openrcErr == nil {
-		if m := missing("rc-service", "rc-update"); len(m) > 0 {
+	case initSystemOpenRC:
+		if m := missingTools(lookPath, "rc-service", "rc-update"); len(m) > 0 {
 			return "", fmt.Errorf("OpenRC booted this host, but %s not found in PATH", strings.Join(m, " and "))
 		}
 		return initSystemOpenRC, nil
 	}
 
+	runDir := c.runDirOrDefault()
 	pid1 := "unknown"
-	if comm, err := os.ReadFile("/proc/1/comm"); err == nil {
-		pid1 = fmt.Sprintf("%q", strings.TrimSpace(string(comm)))
+	if p.pid1 != "" {
+		pid1 = fmt.Sprintf("%q", p.pid1)
 	}
 	var hints []string
-	if len(missing("systemctl")) == 0 {
+	if len(missingTools(lookPath, "systemctl")) == 0 {
 		hints = append(hints, "systemctl is installed, but systemd is not PID 1")
 	}
-	if len(missing("rc-service", "rc-update")) == 0 {
-		hints = append(hints, fmt.Sprintf("OpenRC is installed, but %s does not exist, so OpenRC did not boot this host", openrcMarker))
+	if len(missingTools(lookPath, "rc-service", "rc-update")) == 0 {
+		hints = append(hints, fmt.Sprintf("OpenRC is installed, but %s does not exist, so OpenRC did not boot this host", openrcMarker(runDir)))
 	}
 	msg := fmt.Sprintf("no supported init system found: systemd is not running (%s does not exist) and OpenRC is not running (%s does not exist); PID 1 is %s",
-		systemdMarker, openrcMarker, pid1)
+		systemdMarker(runDir), openrcMarker(runDir), pid1)
 	if len(hints) > 0 {
 		msg += "; " + strings.Join(hints, "; ")
 	}
-	if !errors.Is(openrcErr, fs.ErrNotExist) {
-		msg += fmt.Sprintf("; checking %s: %v", openrcMarker, openrcErr)
+	if p.openrcErr != nil {
+		msg += fmt.Sprintf("; checking %s: %v", openrcMarker(runDir), p.openrcErr)
 	}
 	return "", errors.New(msg + ". sysutils_service supports systemd and OpenRC; containers usually run neither")
 }

@@ -29,20 +29,14 @@ type accRepoCase struct {
 	contains func(t *testing.T, enabled bool) error
 }
 
-// osRelease returns the fields of /etc/os-release.
-func osRelease(t *testing.T) map[string]string {
+// hostOSRelease returns the fields of the host's os-release.
+func hostOSRelease(t *testing.T) osRelease {
 	t.Helper()
-	data, err := os.ReadFile("/etc/os-release")
+	rel, _, err := readOSRelease(hostRoot)
 	if err != nil {
-		t.Skipf("no /etc/os-release: %v", err)
+		t.Skipf("no os-release: %v", err)
 	}
-	fields := map[string]string{}
-	for _, line := range strings.Split(string(data), "\n") {
-		if k, v, ok := strings.Cut(line, "="); ok {
-			fields[k] = strings.Trim(v, `"'`)
-		}
-	}
-	return fields
+	return rel
 }
 
 // commandOutput runs argv and returns its combined output.
@@ -60,7 +54,7 @@ func commandOutput(argv ...string) (string, error) {
 // system's sources use another suite, so apt does not complain about
 // conflicting Signed-By values.
 func aptAccCase(t *testing.T) accRepoCase {
-	rel := osRelease(t)
+	rel := hostOSRelease(t)
 	codename := rel["VERSION_CODENAME"]
 	var uri, keyring, component string
 	switch rel["ID"] {

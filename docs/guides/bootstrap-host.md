@@ -7,7 +7,7 @@ description: |-
 
 # Cookbook: Bootstrapping a host
 
-A freshly installed machine or cloud image has none of what your team expects. It lacks your base packages and running services, your administrators' accounts, their SSH keys and their sudo rights. This recipe sets all of that up in one configuration of about 80 lines, which you apply once to each new host and then again whenever the list of administrators changes. It uses [`sysutils_package`](../resources/package.md), [`sysutils_service`](../resources/service.md), [`sysutils_group`](../resources/group.md), [`sysutils_user`](../resources/user.md), [`sysutils_ssh_authorized_key`](../resources/ssh_authorized_key.md) and [`sysutils_file`](../resources/file.md).
+A freshly installed machine or cloud image has none of what your team expects. It lacks your base packages and running services, your administrators' accounts, their SSH keys and their sudo rights. This recipe sets all of that up in one configuration of about 80 lines, which you apply once to each new host and then again whenever the list of administrators changes. It uses [`sysutils_package`](../resources/package.md), the [`sysutils_host`](../data-sources/host.md) data source, [`sysutils_service`](../resources/service.md), [`sysutils_group`](../resources/group.md), [`sysutils_user`](../resources/user.md), [`sysutils_ssh_authorized_key`](../resources/ssh_authorized_key.md) and [`sysutils_file`](../resources/file.md).
 
 Apply it as root on the host itself. The provider acts on the machine Terraform runs on, so run Terraform there, for example from cloud-init or over SSH as part of your provisioning. The complete configuration is in [`examples/guides/bootstrap-host`](https://github.com/blechschmidt/terraform-provider-sysutils/tree/main/examples/guides/bootstrap-host). CI validates it against the provider, like every snippet on this page.
 
@@ -73,6 +73,50 @@ resource "sysutils_service" "base" {
 **Why a variable for services:** packages have the same names on Debian, Ubuntu, Fedora, RHEL and Alpine, but their services do not. Set `services` for your distribution, for example `-var 'services={"openssh-server"="sshd","chrony"="chronyd"}'` on Fedora. `sysutils_service` detects whether systemd or OpenRC runs the host and uses `systemctl` or `rc-service`/`rc-update`. Destroying it changes nothing: the service keeps running.
 
 `depends_on` is needed here because nothing in the service's arguments refers to the package. Without it, Terraform could try to start `chrony` before it is installed, and the apply would fail with "service not found".
+
+## Distribution-specific packages
+
+```terraform
+# Some packages have different names on each distribution. Read the host's
+# distribution from /etc/os-release and pick the names for its family.
+data "sysutils_host" "this" {}
+
+locals {
+  # The distribution and those it derives from, such as
+  # ["ubuntu", "debian"] or ["rocky", "rhel", "centos", "fedora"].
+  distro_lineage = concat([data.sysutils_host.this.os_id], data.sysutils_host.this.os_id_like)
+
+  distro_family = (
+    contains(local.distro_lineage, "debian") ? "debian" :
+    contains(local.distro_lineage, "fedora") || contains(local.distro_lineage, "rhel") ? "redhat" :
+    contains(local.distro_lineage, "alpine") ? "alpine" :
+    data.sysutils_host.this.os_id
+  )
+
+  # dig and a cron daemon, by distribution family.
+  distro_packages = {
+    debian = ["bind9-dnsutils", "cron"]
+    redhat = ["bind-utils", "cronie"]
+    alpine = ["bind-tools", "cronie"]
+  }
+}
+
+resource "sysutils_package" "distro" {
+  # Indexing rather than lookup() makes an unsupported distribution fail
+  # the plan instead of silently installing nothing.
+  for_each = toset(local.distro_packages[local.distro_family])
+
+  name              = each.key
+  update_cache      = true
+  remove_on_destroy = false
+}
+```
+
+**Why a distribution family:** some packages are named differently on each distribution. `dig` comes in `bind9-dnsutils` on Debian and Ubuntu, `bind-utils` on Fedora and RHEL and `bind-tools` on Alpine. The [`sysutils_host`](../data-sources/host.md) data source reads `/etc/os-release`. `os_id` is the distribution (`ubuntu`) and `os_id_like` the ones it derives from (`["debian"]`), so checking both matches Ubuntu, Linux Mint and Raspberry Pi OS as `debian`, and Rocky Linux and AlmaLinux as `redhat`.
+
+**Why indexing instead of `lookup()`:** on a distribution the map doesn't list, `local.distro_packages[local.distro_family]` fails the plan with "The given key does not identify an element in this collection value". `lookup()` with an empty default would silently install nothing instead.
+
+`sysutils_host` also reports `init_system` and `package_manager`, which you can use the same way, for example to create a systemd unit only where systemd is PID 1.
 
 ## Administrators
 
