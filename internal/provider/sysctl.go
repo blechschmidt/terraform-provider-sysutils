@@ -257,7 +257,11 @@ func readSysctlFD(f *os.File, name string) (string, error) {
 // parameter, like "sysctl -a" restricted to it. Parameters that cannot be
 // read, such as write-only ones or net.ipv6.conf.*.stable_secret while it
 // is unset, are left out, as are other file systems mounted inside /proc/sys
-// (binfmt_misc). A prefix that does not exist yields errSysctlNotFound.
+// (binfmt_misc). So are parameters that only their owner (root) may read
+// (see sysctlOwnerOnly): those include secrets such as
+// net.ipv4.tcp_fastopen_key and net.ipv6.conf.*.stable_secret, which would
+// otherwise end up in the Terraform state. A prefix that does not exist
+// yields errSysctlNotFound.
 func listSysctl(root, prefix string) (map[string]string, error) {
 	parts, err := sysctlComponentsMin(prefix, 1)
 	if err != nil {
@@ -270,6 +274,9 @@ func listSysctl(root, prefix string) (map[string]string, error) {
 	defer func() { _ = f.Close() }()
 	values := map[string]string{}
 	if info.Mode().IsRegular() {
+		if sysctlOwnerOnly(uint32(info.Mode().Perm())) {
+			return values, nil
+		}
 		if v, err := readSysctlFD(f, prefix); err == nil {
 			values[prefix] = v
 		}
@@ -330,6 +337,9 @@ func (w *sysctlWalker) walk(dir *os.File, key string, depth int) error {
 		}
 		switch st.Mode & unix.S_IFMT {
 		case unix.S_IFREG:
+			if sysctlOwnerOnly(st.Mode) {
+				continue // Possibly a secret; see listSysctl.
+			}
 		case unix.S_IFDIR:
 			if uint64(st.Dev) != w.dev { //nolint:unconvert // Dev is not uint64 on every platform.
 				continue // Another file system, such as binfmt_misc.
@@ -371,6 +381,14 @@ func (w *sysctlWalker) visit(f *os.File, key string, depth int) error {
 		return w.walk(f, key, depth+1)
 	}
 	return nil
+}
+
+// sysctlOwnerOnly reports whether a /proc/sys file with the permission
+// bits mode can be read by its owner only. The kernel makes secrets such as
+// net.ipv4.tcp_fastopen_key and stable_secret readable only by root (mode
+// 0600), unlike ordinary parameters (0644).
+func sysctlOwnerOnly(mode uint32) bool {
+	return mode&0o044 == 0
 }
 
 // sysctlKeyComponent returns the key component for the file name name

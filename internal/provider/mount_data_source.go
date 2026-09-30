@@ -150,9 +150,10 @@ func (d *mountDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, 
 				MarkdownDescription: "Third field of the `/etc/fstab` entry for `path`, such as `\"ext4\"` or `\"auto\"`." + pathModeNote + fstabNote + " Null if there is no entry.",
 			},
 			"fstab_options": schema.ListAttribute{
-				ElementType:         types.StringType,
-				Computed:            true,
-				MarkdownDescription: "Options of the `/etc/fstab` entry for `path`, one per element, such as `[\"defaults\", \"noatime\"]`; `[\"defaults\"]` if the entry has no options field." + pathModeNote + fstabNote + " Null if there is no entry.",
+				ElementType: types.StringType,
+				Computed:    true,
+				MarkdownDescription: "Options of the `/etc/fstab` entry for `path`, one per element, such as `[\"defaults\", \"noatime\"]`; `[\"defaults\"]` if the entry has no options field. " +
+					"The values of `password`, `password2`, `pass`, `passwd` and `secret` are replaced by `(redacted)` here and in the other option lists, so that they are not stored in the state." + pathModeNote + fstabNote + " Null if there is no entry.",
 			},
 			"mounts": schema.ListNestedAttribute{
 				Computed: true,
@@ -227,8 +228,8 @@ func (d *mountDataSource) Read(ctx context.Context, req datasource.ReadRequest, 
 		m.Mounted = types.BoolValue(live != nil)
 		if live != nil {
 			m.Source, m.FSType = types.StringValue(live.source), types.StringValue(live.fstype)
-			m.Options = stringListValue(live.options)
-			m.SuperOptions = stringListValue(live.superOptions)
+			m.Options = mountOptionsValue(live.options)
+			m.SuperOptions = mountOptionsValue(live.superOptions)
 			m.ReadOnly = types.BoolValue(live.readOnly())
 		}
 		if fstab != nil {
@@ -236,7 +237,7 @@ func (d *mountDataSource) Read(ctx context.Context, req datasource.ReadRequest, 
 			m.InFstab = types.BoolValue(e != nil)
 			if e != nil {
 				m.FstabDevice, m.FstabFSType = types.StringValue(e.device), optionalString(true, e.fstype)
-				m.FstabOptions = stringListValue(e.options)
+				m.FstabOptions = mountOptionsValue(e.options)
 			}
 		}
 		resp.Diagnostics.Append(resp.State.Set(ctx, &m)...)
@@ -275,8 +276,8 @@ func (d *mountDataSource) Read(ctx context.Context, req datasource.ReadRequest, 
 			Path:         types.StringValue(e.mountPoint),
 			Source:       types.StringValue(e.source),
 			FSType:       types.StringValue(e.fstype),
-			Options:      stringListValue(e.options),
-			SuperOptions: stringListValue(e.superOptions),
+			Options:      mountOptionsValue(e.options),
+			SuperOptions: mountOptionsValue(e.superOptions),
 			ReadOnly:     types.BoolValue(e.readOnly()),
 			InFstab:      inFstab,
 		})
@@ -297,6 +298,29 @@ func stringListValue(s []string) types.List {
 		elems[i] = types.StringValue(v)
 	}
 	return types.ListValueMust(types.StringType, elems)
+}
+
+// secretMountOptions are the mount options whose values are passwords or
+// keys, such as cifs's password= in /etc/fstab or ceph's secret=. The
+// kernel hides most of them in mountinfo, but /etc/fstab has them as
+// written.
+var secretMountOptions = map[string]bool{"password": true, "password2": true, "pass": true, "passwd": true, "secret": true}
+
+// redactedMountOption replaces the value of a secret mount option.
+const redactedMountOption = "(redacted)"
+
+// mountOptionsValue converts the mount options opts to a list value, with
+// the values of secretMountOptions replaced by redactedMountOption: data
+// source results are stored in the state in plain text.
+func mountOptionsValue(opts []string) types.List {
+	out := make([]string, len(opts))
+	for i, o := range opts {
+		if name, _, ok := strings.Cut(o, "="); ok && secretMountOptions[strings.ToLower(name)] {
+			o = name + "=" + redactedMountOption
+		}
+		out[i] = o
+	}
+	return stringListValue(out)
 }
 
 // mountsInRoot returns the mounts at or below root with their mount points

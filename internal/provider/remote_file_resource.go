@@ -422,18 +422,11 @@ func setRemoteFileAttrs(target string, mode fs.FileMode, owner, group string) er
 		return err
 	}
 	defer unlock()
-	f, err := openNoFollow(target, os.O_RDONLY, 0)
+	f, err := openRegularNoFollow(target, os.O_RDONLY)
 	if err != nil {
 		return err
 	}
 	defer func() { _ = f.Close() }()
-	info, err := f.Stat()
-	if err != nil {
-		return err
-	}
-	if err := checkRegularFile(target, info); err != nil {
-		return err
-	}
 	return setOwnershipAndMode(f, owner, group, mode)
 }
 

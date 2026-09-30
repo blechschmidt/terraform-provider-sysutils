@@ -598,3 +598,37 @@ resource "sysutils_file_attributes" "test" {
 		}},
 	})
 }
+
+// Below root_dir, a directory on the way that is swapped for a symlink
+// after the path was resolved must not lead the flag change out of the
+// tree onto a file of the host.
+func TestFileAttributesRootDirSwapRace(t *testing.T) {
+	base := testFileAttrDir(t)
+	root := filepath.Join(base, "root")
+	outside := filepath.Join(base, "outside")
+	for _, d := range []string{filepath.Join(root, "srv"), outside} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mustWrite(t, filepath.Join(root, "srv", "data"), "")
+	mustWrite(t, filepath.Join(outside, "data"), "")
+
+	testHookFileAttrsResolved = func(string) {
+		srv := filepath.Join(root, "srv")
+		if err := os.Rename(srv, srv+".orig"); err != nil {
+			t.Fatal(err)
+		}
+		mustSymlink(t, outside, srv)
+	}
+	t.Cleanup(func() { testHookFileAttrsResolved = nil })
+
+	r := &fileAttributesResource{rootedResource{fsRoot: &fsRoot{dir: root}}}
+	_, diags := r.apply("/srv/data", nil, fileAttrsSpec{want: fsNodumpFL}, nil)
+	if !diags.HasError() || !strings.Contains(fmt.Sprint(diags), "replaced by a symbolic link") {
+		t.Errorf("apply after the swap = %v, want an error", diags)
+	}
+	if flags := mustFileAttrs(t, filepath.Join(outside, "data")); flags&fsNodumpFL != 0 {
+		t.Fatal("the no-dump flag was set on the file outside root_dir")
+	}
+}

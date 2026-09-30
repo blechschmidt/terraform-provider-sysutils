@@ -78,7 +78,7 @@ func (d *sysctlDataSource) Schema(_ context.Context, _ datasource.SchemaRequest,
 			"value": schema.StringAttribute{
 				Computed: true,
 				MarkdownDescription: "With `name`: the parameter's current value, with the trailing newline removed and runs of white space, such as the tabs between the fields of `net.ipv4.ip_local_port_range`, collapsed to one space. " +
-					"Null if the parameter does not exist, and with `prefix`." + rootDirLiveNote,
+					"Null if the parameter does not exist, and with `prefix`. Like every data source attribute, it is stored in the state in plain text, including for parameters that only root may read, such as `net.ipv4.tcp_fastopen_key`." + rootDirLiveNote,
 			},
 			"persisted_value": schema.StringAttribute{
 				Computed:            true,
@@ -93,6 +93,7 @@ func (d *sysctlDataSource) Schema(_ context.Context, _ datasource.SchemaRequest,
 				Computed:    true,
 				MarkdownDescription: "With `prefix`: the current value of every parameter below it, by key, normalized like `value`. " +
 					"Parameters that cannot be read, such as write-only ones, are left out, and so are file systems mounted inside `/proc/sys`, such as `binfmt_misc`. " +
+					"So are parameters that only root may read (mode `0600`), which include secrets such as `net.ipv4.tcp_fastopen_key` and `net.ipv6.conf.*.stable_secret` that would otherwise be stored in the state; read one with `name` if you really need it. " +
 					"Empty if the prefix does not exist; null with `name`." + rootDirLiveNote,
 			},
 			"persisted_values": schema.MapAttribute{

@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/hashicorp/terraform-plugin-framework-validators/setvalidator"
@@ -18,6 +20,7 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/resource/schema/stringplanmodifier"
 	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
+	"golang.org/x/sys/unix"
 )
 
 var (
@@ -209,6 +212,66 @@ func (r *fileAttributesResource) resolveAttrsPath(p string) (string, diag.Diagno
 	return resolvePathAttr(r.root(), p, false)
 }
 
+// testHookFileAttrsResolved, if set, runs after the resource resolved its
+// path below root_dir, so that tests can swap a directory on the way.
+var testHookFileAttrsResolved func(host string)
+
+// openTarget opens the resolved host path target for reading and setting
+// its inode flags, like openACLTarget. Below root_dir, whose tree may be
+// written by others, the path is opened component by component without
+// following symlinks: the directories on the way were real directories when
+// the path was resolved, but a directory swapped for a symlink since then
+// would otherwise lead out of root_dir, and let the immutable flag land on
+// a file of the host.
+func (r *fileAttributesResource) openTarget(target string) (*aclFile, error) {
+	if testHookFileAttrsResolved != nil {
+		testHookFileAttrsResolved(target)
+	}
+	if r.root().isHost() {
+		return openACLTarget(target)
+	}
+	return openACLTargetNoSymlinks(target)
+}
+
+// openACLTargetNoSymlinks is openACLTarget for a host path that must not
+// contain symlinks at all, as resolved below root_dir.
+func openACLTargetNoSymlinks(p string) (*aclFile, error) {
+	dirfd, err := openDirPathNoSymlinks(filepath.Dir(p))
+	if err != nil {
+		if errors.Is(err, errNotRecursivelyRemovable) {
+			return nil, fmt.Errorf("%s changed while it was being accessed: a directory on the way was replaced by a symbolic link", p)
+		}
+		return nil, err
+	}
+	defer func() { _ = unix.Close(dirfd) }()
+	base := filepath.Base(p)
+	var st unix.Stat_t
+	if err := unix.Fstatat(dirfd, base, &st, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+		return nil, &fs.PathError{Op: "lstat", Path: p, Err: err}
+	}
+	switch st.Mode & unix.S_IFMT {
+	case unix.S_IFREG, unix.S_IFDIR:
+	case unix.S_IFLNK:
+		return nil, notACLTargetError{symlinkRefusedError(p)}
+	default:
+		return nil, notACLTargetError{fmt.Errorf("path %q is neither a regular file nor a directory", p)}
+	}
+	fd, err := unix.Openat(dirfd, base, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
+	if err != nil {
+		if errors.Is(err, unix.ELOOP) {
+			return nil, notACLTargetError{symlinkRefusedError(p)}
+		}
+		return nil, &fs.PathError{Op: "open", Path: p, Err: err}
+	}
+	f := os.NewFile(uintptr(fd), p)
+	af, err := newACLFile(f)
+	if err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	return af, nil
+}
+
 // fileAttrsDiag returns an error diagnostic on the path attribute for err.
 func fileAttrsDiag(summary string, err error) diag.Diagnostic {
 	return diag.NewAttributeErrorDiagnostic(path.Root("path"), summary, capitalize(err.Error())+".")
@@ -254,7 +317,7 @@ func (r *fileAttributesResource) apply(p string, prev *fileAttrsSpec, spec fileA
 		return 0, diags
 	}
 	defer unlock()
-	f, err := openACLTarget(target)
+	f, err := r.openTarget(target)
 	if err != nil {
 		diags.Append(fileAttrsDiag("Accessing file", err))
 		return 0, diags
@@ -335,7 +398,7 @@ func (r *fileAttributesResource) Read(ctx context.Context, req resource.ReadRequ
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	f, err := openACLTarget(target)
+	f, err := r.openTarget(target)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		resp.State.RemoveResource(ctx)
@@ -384,7 +447,7 @@ func (r *fileAttributesResource) Delete(ctx context.Context, req resource.Delete
 		return
 	}
 	defer unlock()
-	f, err := openACLTarget(target)
+	f, err := r.openTarget(target)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
 		return

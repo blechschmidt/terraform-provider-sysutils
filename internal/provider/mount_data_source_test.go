@@ -380,3 +380,39 @@ func TestAccMountDataSource_tmpfs(t *testing.T) {
 		},
 	})
 }
+
+// Passwords in /etc/fstab options (cifs password=, ceph secret=) must not
+// be copied into the state, which is often stored far from the host.
+func TestMountDataSource_redactsSecretOptions(t *testing.T) {
+	env := newMountTestEnv(t)
+	fstab := testFstabPrelude +
+		"//srv/share " + env.mountPoint + " cifs username=bob,Password=hunter2,password2=x,uid=1000 0 0\n"
+	if err := os.WriteFile(env.fstab, []byte(fstab), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	m := newFakeMounter()
+	m.table = []mountEntry{
+		{mountPoint: env.mountPoint, root: "/", fstype: "ceph", source: "mon:/", options: []string{"rw"}, superOptions: []string{"name=admin", "secret=AQBs3cr3t=="}},
+	}
+	redacted := stringsExact("username=bob", "Password=(redacted)", "password2=(redacted)", "uid=1000")
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: mountProviderFactories(env.fstab, m),
+		Steps: []resource.TestStep{
+			{
+				Config: mountDataHCL(fmt.Sprintf("path = %q", env.mountPoint)),
+				ConfigStateChecks: []statecheck.StateCheck{
+					expectMountData("fstab_options", redacted),
+					expectMountData("super_options", stringsExact("name=admin", "secret=(redacted)")),
+				},
+			},
+			{
+				Config: mountDataHCL(""),
+				ConfigStateChecks: []statecheck.StateCheck{
+					expectMountData("mounts", knownvalue.ListExact([]knownvalue.Check{knownvalue.ObjectPartial(map[string]knownvalue.Check{
+						"super_options": stringsExact("name=admin", "secret=(redacted)"),
+					})})),
+				},
+			},
+		},
+	})
+}

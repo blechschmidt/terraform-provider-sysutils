@@ -93,7 +93,7 @@ resource "sysutils_file" "backup_target" {
 
 - `fstab_device` (String) First field of the `/etc/fstab` entry for `path`, as written, such as `"UUID=..."`. If there are several entries, the first one, which `mount(8)` uses, is described. Null unless `path` is set. Null if `fstab` is false. Null if there is no entry.
 - `fstab_fstype` (String) Third field of the `/etc/fstab` entry for `path`, such as `"ext4"` or `"auto"`. Null unless `path` is set. Null if `fstab` is false. Null if there is no entry.
-- `fstab_options` (List of String) Options of the `/etc/fstab` entry for `path`, one per element, such as `["defaults", "noatime"]`; `["defaults"]` if the entry has no options field. Null unless `path` is set. Null if `fstab` is false. Null if there is no entry.
+- `fstab_options` (List of String) Options of the `/etc/fstab` entry for `path`, one per element, such as `["defaults", "noatime"]`; `["defaults"]` if the entry has no options field. The values of `password`, `password2`, `pass`, `passwd` and `secret` are replaced by `(redacted)` here and in the other option lists, so that they are not stored in the state. Null unless `path` is set. Null if `fstab` is false. Null if there is no entry.
 - `fstype` (String) File system type of the mount at `path`, as the kernel reports it, such as `"ext4"` or `"nfs4"`. Null unless `path` is set. Null if nothing is mounted.
 - `id` (String) Data source identifier: `path`, or `"*"` without it.
 - `in_fstab` (Boolean) Whether `/etc/fstab` has an entry for `path`. A trailing slash on the entry's mount point is ignored. Null unless `path` is set. Null if `fstab` is false.

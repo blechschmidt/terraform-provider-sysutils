@@ -429,3 +429,37 @@ func TestAccSysctlDataSource_realKernel(t *testing.T) {
 		},
 	})
 }
+
+// Parameters only root can read are secrets such as tcp_fastopen_key and
+// stable_secret; a prefix listing must not put them into the state, not
+// even when the provider runs as root and can read them.
+func TestListSysctlSkipsOwnerOnlyParameters(t *testing.T) {
+	procSys := t.TempDir()
+	writeTestTree(t, procSys, map[string]string{
+		"net/ipv4/tcp_fastopen_key":      "1164d948-7fe9ea0a-1c3b28c7-9a96158f\n",
+		"net/ipv4/ip_forward":            "1\n",
+		"net/ipv6/conf/lo/stable_secret": "fe80::1\n",
+		"net/ipv6/conf/lo/disable_ipv6":  "0\n",
+	})
+	for _, secret := range []string{"net/ipv4/tcp_fastopen_key", "net/ipv6/conf/lo/stable_secret"} {
+		if err := os.Chmod(filepath.Join(procSys, secret), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := listSysctl(procSys, "net")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"net.ipv4.ip_forward": "1", "net.ipv6.conf.lo.disable_ipv6": "0"}
+	if !maps.Equal(got, want) {
+		t.Errorf("listSysctl(net) = %v, want %v (no root-only parameters)", got, want)
+	}
+	got, err = listSysctl(procSys, "net.ipv4.tcp_fastopen_key")
+	if err != nil || len(got) != 0 {
+		t.Errorf("listSysctl(net.ipv4.tcp_fastopen_key) = %v, %v; want no values", got, err)
+	}
+	// Asking for it by name still works.
+	if v, err := readSysctl(procSys, "net.ipv4.tcp_fastopen_key"); err != nil || !strings.HasPrefix(v, "1164d948") {
+		t.Errorf("readSysctl(net.ipv4.tcp_fastopen_key) = %q, %v", v, err)
+	}
+}

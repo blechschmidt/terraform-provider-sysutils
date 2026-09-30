@@ -9,7 +9,19 @@ package provider
 //
 //   - Only http and https URLs are fetched. A redirect never leaves https
 //     once the original URL used it, and the configured headers, which often
-//     carry credentials, are sent to the original host only.
+//     carry credentials, are sent to the original host only. No Referer is
+//     sent, so a token in the URL's query does not reach other hosts.
+//   - A redirect to another host must not lead to a loopback, unspecified
+//     (0.0.0.0, which Linux treats as local), link-local or cloud metadata
+//     address (169.254.169.254 and friends), unless the original URL's
+//     host is one of the same kind. Otherwise a compromised or malicious
+//     server could make the provider fetch local services or the cloud
+//     instance's credentials and, without a checksum, save them to path.
+//     The check applies to the address actually connected to, after DNS
+//     resolution, so DNS rebinding can't bypass it. Private (RFC 1918 and
+//     ULA) addresses are allowed, because internal mirrors commonly
+//     redirect to internal object storage. Through a proxy, the proxy
+//     connects, and this check can't apply.
 //   - Responses are saved as served: the client does not ask for, and so
 //     does not transparently decode, compressed transfer encodings, because
 //     published checksums are those of the served bytes.
@@ -33,11 +45,16 @@ import (
 	"hash"
 	"io"
 	"io/fs"
+	"math"
+	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
@@ -142,19 +159,17 @@ type localFileState struct {
 }
 
 // readLocalFile hashes the regular file at p without following a symlink at
-// p. withSHA512 adds its SHA-512 digest. A missing file returns an error
-// wrapping fs.ErrNotExist.
+// p, and without opening anything but a regular file: opening a device node
+// can have side effects, such as arming a watchdog. withSHA512 adds its
+// SHA-512 digest. A missing file returns an error wrapping fs.ErrNotExist.
 func readLocalFile(p string, withSHA512 bool) (*localFileState, error) {
-	f, err := openNoFollow(p, os.O_RDONLY, 0)
+	f, err := openRegularNoFollow(p, os.O_RDONLY)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = f.Close() }()
 	info, err := f.Stat()
 	if err != nil {
-		return nil, err
-	}
-	if err := checkRegularFile(p, info); err != nil {
 		return nil, err
 	}
 	d := newDigester(withSHA512)
@@ -243,7 +258,14 @@ func downloadToTemp(ctx context.Context, req downloadRequest, target string) (_ 
 	}
 
 	d := newDigester(req.checksum != nil && req.checksum.algo == checksumSHA512)
-	n, err := io.Copy(io.MultiWriter(f, d), io.LimitReader(resp.Body, req.maxSize+1))
+	// One byte more than allowed tells an oversized response apart, unless
+	// that overflows: io.LimitReader reads nothing at all with a negative
+	// limit.
+	limit := req.maxSize
+	if limit < math.MaxInt64 {
+		limit++
+	}
+	n, err := io.Copy(io.MultiWriter(f, d), io.LimitReader(resp.Body, limit))
 	if err != nil {
 		return nil, fmt.Errorf("downloading %s: %w", orig.Redacted(), redactURLError(err))
 	}
@@ -299,6 +321,19 @@ func remoteFileClient(orig *url.URL, headers map[string]string) *http.Client {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.DisableCompression = true
 	transport.TLSClientConfig = &tls.Config{MinVersion: tls.VersionTLS12, RootCAs: testRemoteFileRootCAs.Load()}
+	guard := &redirectDialGuard{origHost: normalizeHostname(orig.Hostname())}
+	proxy := transport.Proxy
+	transport.Proxy = func(req *http.Request) (*url.URL, error) {
+		if proxy == nil {
+			return nil, nil
+		}
+		u, err := proxy(req)
+		if u != nil {
+			guard.addProxy(u)
+		}
+		return u, err
+	}
+	transport.DialContext = guard.dialContext
 	return &http.Client{
 		Transport: transport,
 		CheckRedirect: func(req *http.Request, via []*http.Request) error {
@@ -319,6 +354,8 @@ func checkRemoteFileRedirect(orig *url.URL, headers map[string]string, req *http
 	if orig.Scheme == "https" && req.URL.Scheme != "https" {
 		return fmt.Errorf("refusing redirect from https to %s: the download would no longer be encrypted", req.URL.Redacted())
 	}
+	// net/http adds the previous URL, whose query may hold a token.
+	req.Header.Del("Referer")
 	if !sameHost(orig, req.URL) {
 		for k := range headers {
 			req.Header.Del(k)
@@ -328,6 +365,107 @@ func checkRemoteFileRedirect(orig *url.URL, headers map[string]string, req *http
 		}
 	}
 	return nil
+}
+
+// redirectDialGuard is the dialer of remoteFileClient. The first
+// connection to the original URL's host, and connections to proxies, are
+// not restricted. Every other connection, which only a redirect leads to,
+// is refused if it would go to an internal address (see internalAddrKind)
+// of another kind than the first one: that includes a redirect back to the
+// original host name, whose DNS may have been changed in between.
+type redirectDialGuard struct {
+	origHost string // Normalized; see normalizeHostname.
+
+	mu        sync.Mutex
+	connected bool   // Whether the original host has been connected to.
+	origKind  string // internalAddrKind of the address it was connected to.
+	proxies   map[string]bool
+}
+
+// normalizeHostname lower-cases host and drops a trailing dot, so that
+// "Example.COM." and "example.com" are the same host.
+func normalizeHostname(host string) string {
+	return strings.TrimSuffix(strings.ToLower(host), ".")
+}
+
+// addProxy records the address the transport dials for the proxy u.
+func (g *redirectDialGuard) addProxy(u *url.URL) {
+	port := u.Port()
+	if port == "" {
+		switch u.Scheme {
+		case "https":
+			port = "443"
+		case "socks5", "socks5h":
+			port = "1080"
+		default:
+			port = "80"
+		}
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	if g.proxies == nil {
+		g.proxies = map[string]bool{}
+	}
+	g.proxies[net.JoinHostPort(normalizeHostname(u.Hostname()), port)] = true
+}
+
+func (g *redirectDialGuard) dialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, err
+	}
+	host = normalizeHostname(host)
+	// As http.DefaultTransport's dialer.
+	d := &net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}
+	g.mu.Lock()
+	unrestricted := g.proxies[net.JoinHostPort(host, port)] || (host == g.origHost && !g.connected)
+	g.mu.Unlock()
+	if unrestricted {
+		conn, err := d.DialContext(ctx, network, addr)
+		if err == nil && host == g.origHost {
+			if ap, perr := netip.ParseAddrPort(conn.RemoteAddr().String()); perr == nil {
+				g.mu.Lock()
+				if !g.connected {
+					g.connected, g.origKind = true, internalAddrKind(ap.Addr())
+				}
+				g.mu.Unlock()
+			}
+		}
+		return conn, err
+	}
+	d.Control = func(_, address string, _ syscall.RawConn) error {
+		ap, err := netip.ParseAddrPort(address)
+		if err != nil {
+			return err
+		}
+		kind := internalAddrKind(ap.Addr())
+		g.mu.Lock()
+		origKind := g.origKind
+		g.mu.Unlock()
+		if kind != "" && kind != origKind {
+			return fmt.Errorf("refusing to connect to %s for a redirect to %s: it is a %s address, and the host of url is not", ap.Addr(), host, kind)
+		}
+		return nil
+	}
+	return d.DialContext(ctx, network, addr)
+}
+
+// cloudMetadataAddrs are addresses of cloud instance metadata services
+// that are not link-local: AWS's IPv6 endpoint and Alibaba Cloud's.
+var cloudMetadataAddrs = []netip.Addr{netip.MustParseAddr("fd00:ec2::254"), netip.MustParseAddr("100.100.100.200")}
+
+// internalAddrKind returns what kind of host-internal address a is:
+// "loopback" (including the unspecified address, which reaches the local
+// host), "link-local or cloud metadata", or "" for any other address.
+func internalAddrKind(a netip.Addr) string {
+	a = a.Unmap()
+	switch {
+	case a.IsLoopback(), a.IsUnspecified():
+		return "loopback"
+	case a.IsLinkLocalUnicast(), a.IsLinkLocalMulticast(), slices.Contains(cloudMetadataAddrs, a):
+		return "link-local or cloud metadata"
+	}
+	return ""
 }
 
 // sameHost reports whether a and b name the same host and port, with the
@@ -391,11 +529,8 @@ func (d *downloadedFile) install(target string, mode fs.FileMode, owner, group s
 
 	var orig *fileSnapshot
 	var xattrs map[string][]byte
-	if cur, err := openNoFollow(target, os.O_RDONLY, 0); err == nil {
+	if cur, err := openRegularNoFollow(target, os.O_RDONLY); err == nil {
 		info, err := cur.Stat()
-		if err == nil {
-			err = checkRegularFile(target, info)
-		}
 		if err == nil {
 			orig, err = snapshotOf(target, info)
 		}
