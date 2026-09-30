@@ -365,35 +365,80 @@ func gidMatcher(gid int64) func(fields []string) bool {
 // fields match returns true, or nil if there is none. match is only called
 // with exactly four fields.
 func scanGroupEntries(r io.Reader, match func(fields []string) bool) (*groupEntry, error) {
+	var found *groupEntry
+	err := scanGroupLines(r, groupFile, func(lineNo int, fields []string) (bool, error) {
+		if !match(fields) {
+			return true, nil
+		}
+		e, err := parseGroupFields(groupFile, lineNo, fields)
+		if err != nil {
+			return false, err
+		}
+		found = e
+		return false, nil
+	})
+	return found, err
+}
+
+// listGroupEntries returns every entry of the group database in r, in file
+// order. Unlike the lookups, which skip entries they are not looking for, it
+// reports an entry with a malformed gid, because the list would otherwise be
+// silently incomplete. file names r in error messages.
+func listGroupEntries(r io.Reader, file string) ([]groupEntry, error) {
+	entries := []groupEntry{}
+	err := scanGroupLines(r, file, func(lineNo int, fields []string) (bool, error) {
+		e, err := parseGroupFields(file, lineNo, fields)
+		if err != nil {
+			return false, err
+		}
+		entries = append(entries, *e)
+		return true, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return entries, nil
+}
+
+// scanGroupLines calls fn with the line number and the four colon-separated
+// fields of every entry of the group database in r, until fn returns false
+// or an error. Blank lines, comments and NIS compat entries ("+", "-name")
+// are skipped; a line without exactly four fields is an error. file names r
+// in error messages.
+func scanGroupLines(r io.Reader, file string, fn func(lineNo int, fields []string) (bool, error)) error {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
 	for lineNo := 1; sc.Scan(); lineNo++ {
 		line := sc.Text()
-		// Skip blanks, comments and NIS compat entries ("+", "-name").
 		if line == "" || line[0] == '#' || line[0] == '+' || line[0] == '-' {
 			continue
 		}
 		fields := strings.Split(line, ":")
 		if len(fields) != 4 {
-			return nil, fmt.Errorf("%s:%d: expected 4 colon-separated fields, got %d", groupFile, lineNo, len(fields))
+			return fmt.Errorf("%s:%d: expected 4 colon-separated fields, got %d", file, lineNo, len(fields))
 		}
-		if !match(fields) {
-			continue
+		more, err := fn(lineNo, fields)
+		if err != nil || !more {
+			return err
 		}
-		gid, err := strconv.ParseInt(fields[2], 10, 64)
-		if err != nil {
-			return nil, fmt.Errorf("%s:%d: invalid gid %q", groupFile, lineNo, fields[2])
-		}
-		entry := &groupEntry{Name: fields[0], GID: gid, Members: []string{}}
-		for _, m := range strings.Split(fields[3], ",") {
-			if m = strings.TrimSpace(m); m != "" {
-				entry.Members = append(entry.Members, m)
-			}
-		}
-		return entry, nil
 	}
 	if err := sc.Err(); err != nil {
-		return nil, fmt.Errorf("reading %s: %w", groupFile, err)
+		return fmt.Errorf("reading %s: %w", file, err)
 	}
-	return nil, nil
+	return nil
+}
+
+// parseGroupFields builds the entry for the four fields of a group line.
+func parseGroupFields(file string, lineNo int, fields []string) (*groupEntry, error) {
+	gid, err := strconv.ParseInt(fields[2], 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("%s:%d: invalid gid %q", file, lineNo, fields[2])
+	}
+	entry := &groupEntry{Name: fields[0], GID: gid, Members: []string{}}
+	for _, m := range strings.Split(fields[3], ",") {
+		if m = strings.TrimSpace(m); m != "" {
+			entry.Members = append(entry.Members, m)
+		}
+	}
+	return entry, nil
 }

@@ -72,5 +72,6 @@ resource "sysutils_group" "adm" {
 
 ## Caveats
 
+- To list several groups, for example all groups in a gid range or all groups a user is a member of, use the [`sysutils_groups`](./groups.md) data source.
 - `members` lists only the users named in the group's `/etc/group` entry. Users whose primary group this is are members too, but are not listed there; look them up with the [`sysutils_user`](./user.md) data source and compare its `gid`.
 - The data source only works on Unix-like systems.

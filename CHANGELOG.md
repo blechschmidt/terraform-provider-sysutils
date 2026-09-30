@@ -11,6 +11,7 @@ All notable changes to this provider are listed here. Versions follow [semantic 
   - [`provider::sysutils::parse_os_release`](./docs/functions/parse_os_release.md) parses `os-release` content into a map of fields, with the parser of the `sysutils_host` data source.
   - [`provider::sysutils::parse_passwd_line`](./docs/functions/parse_passwd_line.md) and [`provider::sysutils::parse_fstab_line`](./docs/functions/parse_fstab_line.md) parse one line of `/etc/passwd` or `/etc/fstab` into an object, and return `null` for blank lines and comments.
   - [`provider::sysutils::mode_to_octal`](./docs/functions/mode_to_octal.md) converts a mode in octal, `ls -l` or `chmod` symbolic notation to the four-digit octal form of the `mode` attributes.
+- New data sources [`sysutils_users`](./docs/data-sources/users.md) and [`sysutils_groups`](./docs/data-sources/groups.md) list the entries of `/etc/passwd` and `/etc/group`, optionally filtered by a name regular expression, a uid or gid range, and the login shell and primary gid (users) or a member (groups). They honour the provider's `root_dir`, so they can read the accounts of an image root filesystem.
 
 ## 1.2.1 (2026-09-30)
 

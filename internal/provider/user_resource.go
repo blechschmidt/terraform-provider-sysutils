@@ -1,9 +1,11 @@
 package provider
 
 import (
+	"bufio"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os/exec"
 	"os/user"
 	"sort"
@@ -402,4 +404,31 @@ func readLoginShell(username string) (string, error) {
 		return "", err
 	}
 	return e.Shell, nil
+}
+
+// listPasswdEntries returns every entry of the passwd database in r, in file
+// order, parsed with parsePasswdLine. Blank lines, comments and NIS compat
+// entries ("+", "-name", "+@netgroup") are skipped; any other line that
+// does not parse is an error. file names r in error messages.
+func listPasswdEntries(r io.Reader, file string) ([]passwdLine, error) {
+	entries := []passwdLine{}
+	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
+	for lineNo := 1; sc.Scan(); lineNo++ {
+		line := sc.Text()
+		if strings.HasPrefix(line, "+") || strings.HasPrefix(line, "-") {
+			continue
+		}
+		e, ok, err := parsePasswdLine(line)
+		if err != nil {
+			return nil, fmt.Errorf("%s:%d: %w", file, lineNo, err)
+		}
+		if ok {
+			entries = append(entries, e)
+		}
+	}
+	if err := sc.Err(); err != nil {
+		return nil, fmt.Errorf("reading %s: %w", file, err)
+	}
+	return entries, nil
 }

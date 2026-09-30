@@ -323,6 +323,8 @@ func (p *sysutilsProvider) DataSources(_ context.Context) []func() datasource.Da
 		NewFileDataSource,
 		NewUserDataSource,
 		NewGroupDataSource,
+		NewUsersDataSource,
+		NewGroupsDataSource,
 		NewHostDataSource,
 		NewPackageDataSource,
 		NewServiceDataSource,

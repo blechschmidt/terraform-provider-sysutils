@@ -35,6 +35,7 @@ A missing account is an error. The data source is read during planning, so an ac
 
 ## Caveats
 
+- To list several accounts, for example all users in a uid range, use the [`sysutils_users`](./users.md) data source.
 - `groups` lists supplementary groups only. The primary group is available as `gid`; use the [`sysutils_group`](./group.md) data source with `gid` to get its name.
 - `shell` and `comment` are read with `getent passwd`, which must be installed. It is part of glibc and of most other C libraries and BusyBox.
 - The data source only works on Unix-like systems.
