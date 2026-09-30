@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/hashicorp/go-version"
+	"github.com/hashicorp/terraform-plugin-go/tfprotov6"
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/knownvalue"
 	"github.com/hashicorp/terraform-plugin-testing/plancheck"
@@ -46,9 +48,11 @@ const (
 // in the wild to be compatible with, so its upgrade test is skipped until the
 // release that ships it (set the version here then).
 var upgradeFirstRelease = map[string]string{
-	"sysutils_file":      "1.0.0",
-	"sysutils_exec":      "1.0.0",
-	"sysutils_directory": "1.1.0",
+	"sysutils_file":          "1.0.0",
+	"sysutils_exec":          "1.0.0",
+	"sysutils_directory":     "1.1.0",
+	"sysutils_firewall_rule": "1.1.0",
+	"sysutils_swap":          "1.1.0",
 }
 
 func upgradeFromVersion() string {
@@ -58,11 +62,19 @@ func upgradeFromVersion() string {
 	return defaultUpgradeFromVersion
 }
 
-// upgradeSteps returns the steps of an upgrade test for resourceType: apply
-// config with the released provider, check that the current build plans no
-// changes, then apply updated with the current build to show that the
-// upgraded state is usable. The test case destroys with the current build.
+// upgradeSteps returns the steps of an upgrade test for resourceType from
+// the released provider: the steps of upgradeCheckSteps (apply config with
+// the released provider, then check that the current build plans no
+// changes and keeps the stored attributes), followed by an apply of updated
+// with the current build to show that the upgraded state is usable. The
+// test case destroys with the current build.
 func upgradeSteps(t *testing.T, resourceType, config, updated string, checks ...statecheck.StateCheck) []resource.TestStep {
+	t.Helper()
+	return upgradeStepsWith(t, resourceType, config, updated, upgradeOptions{}, checks...)
+}
+
+// upgradeStepsWith is upgradeSteps with options.
+func upgradeStepsWith(t *testing.T, resourceType, config, updated string, opts upgradeOptions, checks ...statecheck.StateCheck) []resource.TestStep {
 	t.Helper()
 
 	from := upgradeFromVersion()
@@ -86,27 +98,80 @@ func upgradeSteps(t *testing.T, resourceType, config, updated string, checks ...
 	t.Setenv("TF_ACC_PROVIDER_HOST", upgradeProviderHost)
 	t.Setenv("TF_ACC_PROVIDER_NAMESPACE", upgradeProviderNamespace)
 
+	released := resource.ExternalProvider{
+		Source:            upgradeProviderHost + "/" + upgradeProviderNamespace + "/sysutils",
+		VersionConstraint: from,
+	}
+	return append(upgradeCheckSteps(released, config, opts, checks...), resource.TestStep{
+		ProtoV6ProviderFactories: opts.providerFactories(),
+		Config:                   updated,
+	})
+}
+
+// upgradeOptions adjusts the steps of an upgrade test.
+type upgradeOptions struct {
+	// changed lists stored attributes, as "<resource address>.<attribute>",
+	// that the upgrade changes on purpose; they may, but need not, change.
+	changed []string
+	// factories serve the current build; testAccProtoV6ProviderFactories
+	// if nil. Tests that confine the provider, such as to a network
+	// namespace, pass their own.
+	factories map[string]func() (tfprotov6.ProviderServer, error)
+}
+
+func (o upgradeOptions) providerFactories() map[string]func() (tfprotov6.ProviderServer, error) {
+	if o.factories != nil {
+		return o.factories
+	}
+	return testAccProtoV6ProviderFactories
+}
+
+// upgradeCheckSteps returns the steps that upgrade config from the provider
+// baseline to the current build:
+//
+//  1. apply config with baseline and record the state;
+//  2. plan config with the current build, which must plan no changes, then
+//     apply that empty plan, which stores the upgraded state; checks run
+//     here, and every attribute of the recorded state must still have its
+//     value (attributes the baseline did not have may be added);
+//  3. plan config again with the current build, with and without a
+//     refresh: both plans must be empty.
+//
+// Step 2 plans with a refresh, as "terraform plan" does. A plan without one
+// is only checked after the upgraded state has been stored: until then,
+// Terraform plans an in-place update without any changed value for a
+// resource whose schema gained a sensitive attribute since the baseline,
+// because the state has no sensitivity marks for it yet.
+func upgradeCheckSteps(baseline resource.ExternalProvider, config string, opts upgradeOptions, checks ...statecheck.StateCheck) []resource.TestStep {
+	var before map[string]map[string]string
 	return []resource.TestStep{
 		{
-			ExternalProviders: map[string]resource.ExternalProvider{
-				"sysutils": {
-					Source:            upgradeProviderHost + "/" + upgradeProviderNamespace + "/sysutils",
-					VersionConstraint: from,
-				},
+			ExternalProviders: map[string]resource.ExternalProvider{"sysutils": baseline},
+			Config:            config,
+			Check: func(s *terraform.State) error {
+				before = upgradeStateAttributes(s)
+				if len(before) == 0 {
+					return errors.New("the baseline apply left no resources in state")
+				}
+				return nil
 			},
-			Config: config,
 		},
 		{
-			ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
+			ProtoV6ProviderFactories: opts.providerFactories(),
 			Config:                   config,
 			ConfigPlanChecks: resource.ConfigPlanChecks{
 				PreApply: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()},
 			},
 			ConfigStateChecks: checks,
+			Check: func(s *terraform.State) error {
+				return upgradeCompareState(before, upgradeStateAttributes(s), opts.changed)
+			},
 		},
 		{
-			ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
-			Config:                   updated,
+			ProtoV6ProviderFactories: opts.providerFactories(),
+			Config:                   config,
+			PlanOnly:                 true,
+			ExpectNonEmptyPlan:       false,
 		},
 	}
 }
@@ -249,5 +314,32 @@ resource "sysutils_directory" "test" {
 
 	resource.Test(t, resource.TestCase{
 		Steps: upgradeSteps(t, "sysutils_directory", config("0750"), config("0700")),
+	})
+}
+
+func TestAccUpgrade_firewallRule(t *testing.T) {
+	ns := newFirewallNetns(t, "nft", "iptables", "ip6tables")
+	ns.runTerraformInside()
+	resource.Test(t, resource.TestCase{
+		Steps: upgradeStepsWith(t, "sysutils_firewall_rule",
+			firewallUpgradeConfig("22, 2222"),
+			firewallUpgradeConfig("22"),
+			upgradeOptions{factories: ns.providerFactories()},
+			firewallUpgradeChecks()...,
+		),
+		CheckDestroy: ns.checkFirewallUpgradeDestroyed(),
+	})
+}
+
+func TestAccUpgrade_swap(t *testing.T) {
+	env := newSwapAccEnv(t)
+	resource.Test(t, resource.TestCase{
+		Steps: upgradeStepsWith(t, "sysutils_swap",
+			swapUpgradeConfig(env.swapfile, 7),
+			swapUpgradeConfig(env.swapfile, 8),
+			upgradeOptions{factories: swapProviderFactories(env.fstab, nil)},
+			swapUpgradeChecks()...,
+		),
+		CheckDestroy: env.checkSwapUpgradeDestroyed(t),
 	})
 }

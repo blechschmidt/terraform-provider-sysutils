@@ -21,7 +21,11 @@ testacc:
 # profile let the tests mount a tmpfs inside the container's own mount
 # namespace; the host's mounts are not affected. NET_ADMIN lets the firewall
 # rule tests change the firewall of network namespaces they create inside
-# the container; the host's firewall is not affected either.
+# the container; the host's firewall is not affected either. Docker's
+# default seccomp profile blocks swapon, so the swap tests need an unconfined
+# one; they enable swap files only in their own directory below /tmp, which
+# is an anonymous volume because swap files can't be on the image's overlay
+# file system. The volume is removed with the container.
 #
 # SYSUTILS_UPGRADE_FROM_REF=auto (or a git ref) also runs the upgrade tests
 # from a local baseline build (internal/provider/upgrade_local_acc_test.go).
@@ -40,6 +44,7 @@ testacc-docker:
 		--build-arg TF_CLI_VERSION=$(TF_CLI_VERSION) \
 		-t $(TESTACC_IMAGE) .
 	docker run --rm --cap-add SYS_ADMIN --cap-add NET_ADMIN --security-opt apparmor=unconfined \
+		--security-opt seccomp=unconfined -v /tmp \
 		$(TESTACC_UPGRADE_ARGS) $(TESTACC_IMAGE)
 
 # Run testacc-docker for every CLI in the CI matrix.

@@ -4,7 +4,11 @@ All notable changes to this provider are listed here. Versions follow [semantic 
 
 ## Unreleased
 
-No changes yet.
+### Tests
+
+- The [upgrade tests](./README.md#upgrade-tests) now cover every resource: `sysutils_firewall_rule` and `sysutils_swap`, the two that v1.1.0's `upgrade_local_acc_test.go` left out, are upgraded from v1.1.0 on the Terraform Registry (`upgrade_acc_test.go`) and from a local baseline build (`upgrade_local_acc_test.go`, with `SYSUTILS_UPGRADE_FROM_REF`). The firewall tests run Terraform, and with it the baseline provider, inside a private network namespace; the swap tests use `persist = false` and leave `/etc/fstab` alone.
+- The registry upgrade tests now run the same checks as the local ones: besides an empty plan, every stored attribute must keep its value, and a later plan without a refresh must be empty too.
+- `make testacc-docker`, and with it the `acceptance` CI job, now runs the swap acceptance tests instead of skipping them: the container gets an unconfined seccomp profile, which Docker's default blocks `swapon` with, and a volume on `/tmp` for the swap files. A skipped swap test now fails the run, except for the tests on loop devices, which a container doesn't have.
 
 ## 1.1.0 (2026-09-30)
 

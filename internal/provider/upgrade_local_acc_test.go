@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"os/user"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"slices"
 	"strconv"
@@ -19,7 +20,6 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 	"github.com/hashicorp/terraform-plugin-testing/knownvalue"
-	"github.com/hashicorp/terraform-plugin-testing/plancheck"
 	"github.com/hashicorp/terraform-plugin-testing/statecheck"
 	"github.com/hashicorp/terraform-plugin-testing/terraform"
 	"github.com/hashicorp/terraform-plugin-testing/tfjsonpath"
@@ -328,32 +328,17 @@ func extractTar(r io.Reader, dir string) error {
 }
 
 // localUpgradeSteps returns the steps of an upgrade test for resourceType
-// from a local baseline build (see above):
-//
-//  1. apply config with the baseline provider and record the state;
-//  2. plan config with the current code, which must plan no changes, then
-//     apply that empty plan, which stores the upgraded state; checks run
-//     here, and every attribute of the recorded state must still have its
-//     value (attributes the baseline did not have may be added);
-//  3. plan config again with the current code, with and without a refresh:
-//     both plans must be empty.
-//
-// Step 2 plans with a refresh, as "terraform plan" does. A plan without one
-// is only checked after the upgraded state has been stored: until then,
-// Terraform plans an in-place update without any changed value for a
-// resource whose schema gained a sensitive attribute since the baseline,
-// because the state has no sensitivity marks for it yet.
-//
-// The test case destroys with the current code.
+// from a local baseline build (see above): the steps of upgradeCheckSteps,
+// which apply config with the baseline and then check that the current code
+// plans no changes for it and keeps every stored attribute. The test case
+// destroys with the current code.
 func localUpgradeSteps(t *testing.T, resourceType, config string, checks ...statecheck.StateCheck) []resource.TestStep {
 	t.Helper()
-	return localUpgradeStepsChanging(t, resourceType, config, nil, checks...)
+	return localUpgradeStepsWith(t, resourceType, config, upgradeOptions{}, checks...)
 }
 
-// localUpgradeStepsChanging is localUpgradeSteps for a resource whose
-// upgrade changes stored attributes on purpose. changed lists them as
-// "<resource address>.<attribute>"; they may, but need not, change.
-func localUpgradeStepsChanging(t *testing.T, resourceType, config string, changed []string, checks ...statecheck.StateCheck) []resource.TestStep {
+// localUpgradeStepsWith is localUpgradeSteps with options.
+func localUpgradeStepsWith(t *testing.T, resourceType, config string, opts upgradeOptions, checks ...statecheck.StateCheck) []resource.TestStep {
 	t.Helper()
 	// resource.Test would skip the test, but only after the baseline has
 	// been built.
@@ -387,39 +372,7 @@ func localUpgradeStepsChanging(t *testing.T, resourceType, config string, change
 	t.Setenv("TF_ACC_PROVIDER_HOST", upgradeProviderHost)
 	t.Setenv("TF_ACC_PROVIDER_NAMESPACE", upgradeProviderNamespace)
 
-	var before map[string]map[string]string
-	return []resource.TestStep{
-		{
-			ExternalProviders: map[string]resource.ExternalProvider{
-				"sysutils": {Source: addr, VersionConstraint: b.version},
-			},
-			Config: config,
-			Check: func(s *terraform.State) error {
-				before = upgradeStateAttributes(s)
-				if len(before) == 0 {
-					return errors.New("the baseline apply left no resources in state")
-				}
-				return nil
-			},
-		},
-		{
-			ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
-			Config:                   config,
-			ConfigPlanChecks: resource.ConfigPlanChecks{
-				PreApply: []plancheck.PlanCheck{plancheck.ExpectEmptyPlan()},
-			},
-			ConfigStateChecks: checks,
-			Check: func(s *terraform.State) error {
-				return upgradeCompareState(before, upgradeStateAttributes(s), changed)
-			},
-		},
-		{
-			ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
-			Config:                   config,
-			PlanOnly:                 true,
-			ExpectNonEmptyPlan:       false,
-		},
-	}
+	return upgradeCheckSteps(resource.ExternalProvider{Source: addr, VersionConstraint: b.version}, config, opts, checks...)
 }
 
 // upgradeStateAttributes returns the flattened attributes of every resource
@@ -596,7 +549,7 @@ func TestAccUpgradeLocal_fileLine(t *testing.T) {
 	resource.Test(t, resource.TestCase{
 		// The id of a line no longer contains the line, which may be a
 		// secret; refresh rewrites ids of the old form.
-		Steps: localUpgradeStepsChanging(t, "sysutils_file_line", fmt.Sprintf(`
+		Steps: localUpgradeStepsWith(t, "sysutils_file_line", fmt.Sprintf(`
 resource "sysutils_file_line" "line" {
   path   = %[1]q
   line   = "PermitRootLogin no"
@@ -608,7 +561,7 @@ resource "sysutils_file_line" "block" {
   block  = "Match User backup\n  ForceCommand internal-sftp\n"
   marker = "# {mark} backup"
 }
-`, p), []string{"sysutils_file_line.line.id"}),
+`, p), upgradeOptions{changed: []string{"sysutils_file_line.line.id"}}),
 		CheckDestroy: checkFileLineContent(p, "Port 22\n"),
 	})
 }
@@ -1017,5 +970,113 @@ resource "sysutils_alternatives" "test" {
 }
 `, e.name, e.a, e.link)),
 		CheckDestroy: e.check("gone", ""),
+	})
+}
+
+// firewallUpgradeConfig is the configuration of the firewall_rule upgrade
+// tests: a rule with each backend, with most attributes set.
+func firewallUpgradeConfig(ports string) string {
+	return fmt.Sprintf(`
+resource "sysutils_firewall_rule" "nft" {
+  name              = "upgrade-nft"
+  backend           = "nftables"
+  family            = "ipv4"
+  chain             = "input"
+  protocol          = "tcp"
+  source            = "10.0.0.0/8"
+  destination_ports = [%s]
+  in_interface      = "lo"
+  action            = "accept"
+  comment           = "upgrade test"
+}
+
+resource "sysutils_firewall_rule" "ipt" {
+  name              = "upgrade-ipt"
+  backend           = "iptables"
+  chain             = "output"
+  protocol          = "udp"
+  destination_ports = [53]
+  action            = "reject"
+}
+`, ports)
+}
+
+func firewallUpgradeChecks() []statecheck.StateCheck {
+	return []statecheck.StateCheck{
+		statecheck.ExpectKnownValue("sysutils_firewall_rule.nft", tfjsonpath.New("active_backend"), knownvalue.StringExact(firewallBackendNftables)),
+		statecheck.ExpectKnownValue("sysutils_firewall_rule.ipt", tfjsonpath.New("active_backend"), knownvalue.StringExact(firewallBackendIptables)),
+	}
+}
+
+// checkFirewallUpgradeDestroyed checks that the current code found and
+// removed the rules the baseline added.
+func (ns *fwNetns) checkFirewallUpgradeDestroyed() resource.TestCheckFunc {
+	return resource.ComposeAggregateTestCheckFunc(
+		ns.expectNoNftTable(),
+		ns.expectIptables("iptables"),
+		ns.expectIptables("ip6tables"),
+	)
+}
+
+// swapUpgradeConfig is the configuration of the swap upgrade tests. With
+// persist = false, the baseline build, which can't be pointed at a
+// temporary fstab, leaves the real /etc/fstab alone.
+func swapUpgradeConfig(p string, priority int) string {
+	return swapHCL(p, fmt.Sprintf("size_mib = 8\npriority = %d\npersist  = false", priority))
+}
+
+func swapUpgradeChecks() []statecheck.StateCheck {
+	return []statecheck.StateCheck{
+		statecheck.ExpectKnownValue(testSwapResource, tfjsonpath.New("created"), knownvalue.Bool(true)),
+		statecheck.ExpectKnownValue(testSwapResource, tfjsonpath.New("uuid"), knownvalue.StringRegexp(regexp.MustCompile(`^[0-9a-f-]{36}$`))),
+	}
+}
+
+// checkSwapUpgradeDestroyed checks that the current code disabled and
+// deleted the swap file the baseline created, and that neither build
+// changed an fstab.
+func (e swapTestEnv) checkSwapUpgradeDestroyed(t *testing.T) resource.TestCheckFunc {
+	t.Helper()
+	hostFstab, err := os.ReadFile(defaultFstabPath)
+	if err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+	return resource.ComposeAggregateTestCheckFunc(
+		checkRealSwap(t, e.swapfile, 0, nil),
+		checkSwapFile(e.swapfile, 0),
+		e.checkFstab(testFstabPrelude),
+		func(*terraform.State) error {
+			got, err := os.ReadFile(defaultFstabPath)
+			if err != nil && !os.IsNotExist(err) {
+				return err
+			}
+			if !bytes.Equal(got, hostFstab) {
+				return fmt.Errorf("%s changed:\n%s", defaultFstabPath, got)
+			}
+			return nil
+		},
+	)
+}
+
+func TestAccUpgradeLocal_firewallRule(t *testing.T) {
+	ns := newFirewallNetns(t, "nft", "iptables", "ip6tables")
+	ns.runTerraformInside()
+	resource.Test(t, resource.TestCase{
+		Steps: localUpgradeStepsWith(t, "sysutils_firewall_rule", firewallUpgradeConfig("22, 2222"),
+			upgradeOptions{factories: ns.providerFactories()},
+			firewallUpgradeChecks()...,
+		),
+		CheckDestroy: ns.checkFirewallUpgradeDestroyed(),
+	})
+}
+
+func TestAccUpgradeLocal_swap(t *testing.T) {
+	env := newSwapAccEnv(t)
+	resource.Test(t, resource.TestCase{
+		Steps: localUpgradeStepsWith(t, "sysutils_swap", swapUpgradeConfig(env.swapfile, 7),
+			upgradeOptions{factories: swapProviderFactories(env.fstab, nil)},
+			swapUpgradeChecks()...,
+		),
+		CheckDestroy: env.checkSwapUpgradeDestroyed(t),
 	})
 }

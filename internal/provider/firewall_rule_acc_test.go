@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"runtime"
 	"strings"
@@ -113,6 +114,50 @@ func (ns *fwNetns) runner() commandRunner {
 		spec.Argv = append([]string{"nsenter", "--net=" + ns.path, "--"}, spec.Argv...)
 		return runCommand(ctx, spec)
 	}
+}
+
+// runTerraformInside makes the test framework run Terraform inside the
+// namespace, through a wrapper script in TF_ACC_TERRAFORM_PATH, so that the
+// providers Terraform starts, such as an earlier release of this provider
+// in the upgrade tests, run inside it too. "init" still runs outside,
+// because it may download providers and the namespace has no network. The
+// in-process provider under test needs providerFactories as before.
+func (ns *fwNetns) runTerraformInside() {
+	t := ns.t
+	t.Helper()
+	cli := os.Getenv("TF_ACC_TERRAFORM_PATH")
+	if cli == "" {
+		var err error
+		if cli, err = exec.LookPath("terraform"); err != nil {
+			t.Fatalf("set TF_ACC_TERRAFORM_PATH to run Terraform inside a network namespace: %v", err)
+		}
+	}
+	cli, err := filepath.Abs(cli)
+	if err != nil {
+		t.Fatal(err)
+	}
+	nsenter, err := exec.LookPath("nsenter")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The same base name as the CLI, in case the framework tells
+	// Terraform and OpenTofu apart by it.
+	wrapper := filepath.Join(t.TempDir(), filepath.Base(cli))
+	script := fmt.Sprintf(`#!/bin/sh
+if [ "$1" = init ]; then
+	exec %[1]s "$@"
+fi
+exec %[2]s --net=%[3]s -- %[1]s "$@"
+`, shellQuote(cli), shellQuote(nsenter), shellQuote(ns.path))
+	if err := os.WriteFile(wrapper, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TF_ACC_TERRAFORM_PATH", wrapper)
+}
+
+// shellQuote quotes s as a single word for sh.
+func shellQuote(s string) string {
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
 
 // exec runs argv inside the namespace and returns its combined output.
