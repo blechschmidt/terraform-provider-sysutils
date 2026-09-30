@@ -299,6 +299,45 @@ resource "sysutils_file" "test" {
 	})
 }
 
+// TestAccUpgrade_fileContentWO upgrades a file with sensitive_content, then
+// switches it to content_wo, which the released provider does not have, and
+// checks that the secret leaves the state.
+func TestAccUpgrade_fileContentWO(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "db.env")
+	stateDir := harnessStateDir(t)
+	const secret = "DB_PASSWORD=wo-upgrade-8d2c\n"
+
+	steps := upgradeSteps(t, "sysutils_file", fmt.Sprintf(`
+resource "sysutils_file" "test" {
+  path              = %q
+  sensitive_content = %q
+  mode              = "0600"
+}
+`, target, secret), fmt.Sprintf(`
+resource "sysutils_file" "test" {
+  path               = %q
+  content_wo         = %q
+  content_wo_version = 1
+  mode               = "0600"
+}
+`, target, secret))
+	last := &steps[len(steps)-1]
+	last.ConfigStateChecks = []statecheck.StateCheck{
+		statecheck.ExpectKnownValue("sysutils_file.test", tfjsonpath.New("sensitive_content"), knownvalue.Null()),
+		statecheck.ExpectKnownValue("sysutils_file.test", tfjsonpath.New("content_sha256"),
+			knownvalue.StringExact(sha256Hex([]byte(secret)))),
+	}
+	last.Check = resource.ComposeAggregateTestCheckFunc(
+		checkFileContent(target, secret),
+		checkStateHasNoPlaintext(stateDir, sha256Hex([]byte(secret)), "wo-upgrade-8d2c"),
+	)
+	resource.Test(t, resource.TestCase{
+		TerraformVersionChecks: writeOnlyVersionChecks,
+		Steps:                  steps,
+		CheckDestroy:           checkPathGone(target),
+	})
+}
+
 func TestAccUpgrade_exec(t *testing.T) {
 	dir := t.TempDir()
 	marker := filepath.Join(dir, "runs")

@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"unicode/utf8"
 
+	"github.com/hashicorp/terraform-plugin-framework-validators/int64validator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/resourcevalidator"
 	"github.com/hashicorp/terraform-plugin-framework-validators/stringvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
@@ -49,6 +50,8 @@ type fileModel struct {
 	Path             types.String `tfsdk:"path"`
 	Content          types.String `tfsdk:"content"`
 	SensitiveContent types.String `tfsdk:"sensitive_content"`
+	ContentWO        types.String `tfsdk:"content_wo"`
+	ContentWOVersion types.Int64  `tfsdk:"content_wo_version"`
 	ContentBase64    types.String `tfsdk:"content_base64"`
 	Source           types.String `tfsdk:"source"`
 	ContentSHA256    types.String `tfsdk:"content_sha256"`
@@ -65,7 +68,7 @@ func (r *fileResource) Metadata(_ context.Context, req resource.MetadataRequest,
 
 func (r *fileResource) Schema(_ context.Context, _ resource.SchemaRequest, resp *resource.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		MarkdownDescription: "Writes a file at `path` whose contents come from exactly one of `content` (UTF-8 text), `sensitive_content` (UTF-8 text hidden from plans), `content_base64` (binary data) or `source` (a local file to copy). " +
+		MarkdownDescription: "Writes a file at `path` whose contents come from exactly one of `content` (UTF-8 text), `sensitive_content` (UTF-8 text hidden from plans), `content_wo` (UTF-8 text never stored in state, Terraform 1.11 and later), `content_base64` (binary data) or `source` (a local file to copy). " +
 			"On create the provider also sets the requested `mode`, and optionally `owner` / `group` (which require privileges). " +
 			"On update, content, mode, and ownership are reconciled in-place. On destroy, the file is removed.",
 		Attributes: map[string]schema.Attribute{
@@ -79,27 +82,44 @@ func (r *fileResource) Schema(_ context.Context, _ resource.SchemaRequest, resp 
 			},
 			"content": schema.StringAttribute{
 				Optional: true,
-				MarkdownDescription: "File contents as UTF-8 text. Exactly one of `content`, `sensitive_content`, `content_base64` and `source` must be set. " +
+				MarkdownDescription: "File contents as UTF-8 text. Exactly one of `content`, `sensitive_content`, `content_wo`, `content_base64` and `source` must be set. " +
 					"If the file is changed outside Terraform, refresh records its actual text here, so the plan shows a line-by-line diff of the drift.",
 			},
 			"sensitive_content": schema.StringAttribute{
 				Optional:  true,
 				Sensitive: true,
 				MarkdownDescription: "Like `content`, for secrets: the value is marked sensitive, so plans show only `(sensitive value)` for it and a change is visible only through `content_sha256` and `content_md5`. " +
-					"Exactly one of `content`, `sensitive_content`, `content_base64` and `source` must be set. " +
-					"The value is still stored in the state in plain text.",
+					"Exactly one of `content`, `sensitive_content`, `content_wo`, `content_base64` and `source` must be set. " +
+					"The value is still stored in the state in plain text; use `content_wo` to keep it out of the state.",
+			},
+			"content_wo": schema.StringAttribute{
+				Optional:  true,
+				Sensitive: true,
+				WriteOnly: true,
+				MarkdownDescription: "File contents as UTF-8 text, as a write-only argument: " +
+					"the value is never stored in the plan or the state, so it may come from an ephemeral resource or ephemeral variable. Requires Terraform 1.11 or later. " +
+					"Exactly one of `content`, `sensitive_content`, `content_wo`, `content_base64` and `source` must be set. " +
+					"Terraform does not remember the value, so a changed value is not detected: the file is written on create, when `content_wo_version` changes, and when the file on disk no longer matches what the provider last wrote. " +
+					"For that comparison, the SHA-256 checksum of the written content is kept in the resource's private state. " +
+					"`content_sha256` and `content_md5` are known only after apply whenever the file is written.",
+			},
+			"content_wo_version": schema.Int64Attribute{
+				Optional: true,
+				MarkdownDescription: "Any number; change it to write the current value of `content_wo` to the file. Requires `content_wo`. " +
+					"Changing it plans an in-place update; the value itself is stored in the state.",
+				Validators: []validator.Int64{int64validator.AlsoRequires(path.MatchRoot("content_wo"))},
 			},
 			"content_base64": schema.StringAttribute{
 				Optional: true,
 				MarkdownDescription: "File contents as standard (padded) base64, for binary data. " +
 					"Use `filebase64()` or `base64encode()` to produce it. " +
-					"Exactly one of `content`, `sensitive_content`, `content_base64` and `source` must be set. " +
+					"Exactly one of `content`, `sensitive_content`, `content_wo`, `content_base64` and `source` must be set. " +
 					"If the file is changed outside Terraform, refresh records the base64 encoding of its actual contents here, so the plan shows the drift.",
 				Validators: []validator.String{base64String()},
 			},
 			"source": schema.StringAttribute{
 				Optional: true,
-				MarkdownDescription: "Path to a local file to copy to `path`. Exactly one of `content`, `sensitive_content`, `content_base64` and `source` must be set. " +
+				MarkdownDescription: "Path to a local file to copy to `path`. Exactly one of `content`, `sensitive_content`, `content_wo`, `content_base64` and `source` must be set. " +
 					"Relative paths are resolved against Terraform's working directory; prefer `${path.module}/...`. The provider's `root_dir` does not apply to `source`. " +
 					"Its contents are not stored in the state, so plans show changes only through `content_sha256` and `content_md5`. " +
 					"The source is read and hashed during every plan, so a change to its contents plans an update even if the configuration is unchanged. " +
@@ -154,6 +174,7 @@ func (r *fileResource) ConfigValidators(_ context.Context) []resource.ConfigVali
 		resourcevalidator.ExactlyOneOf(
 			path.MatchRoot("content"),
 			path.MatchRoot("sensitive_content"),
+			path.MatchRoot("content_wo"),
 			path.MatchRoot("content_base64"),
 			path.MatchRoot("source"),
 		),
@@ -175,6 +196,31 @@ func (r *fileResource) ModifyPlan(ctx context.Context, req resource.ModifyPlanRe
 	}
 
 	sha, md := types.StringUnknown(), types.StringUnknown()
+	if !config.ContentWO.IsNull() {
+		// The value of content_wo is not planned: an ephemeral value may
+		// differ at apply. The checksums are unknown if the file will be
+		// written, and otherwise stay as refreshed.
+		var prior *fileModel
+		if !req.State.Raw.IsNull() {
+			prior = &fileModel{}
+			resp.Diagnostics.Append(req.State.Get(ctx, prior)...)
+			// A new path replaces the resource, which writes the file.
+			if !prior.Path.Equal(config.Path) {
+				prior = nil
+			}
+		}
+		written, diags := getPrivateString(ctx, req.Private, fileContentWOPrivateKey)
+		resp.Diagnostics.Append(diags...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+		if prior != nil && !contentWONeedsWrite(prior, config.ContentWOVersion, written) {
+			sha, md = prior.ContentSHA256, prior.ContentMD5
+		}
+		resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("content_sha256"), sha)...)
+		resp.Diagnostics.Append(resp.Plan.SetAttribute(ctx, path.Root("content_md5"), md)...)
+		return
+	}
 	sums, known, err := desiredChecksums(&config)
 	if err != nil {
 		resp.Diagnostics.AddAttributeError(contentAttribute(&config), "Unable to read file contents", capitalize(err.Error())+".")
@@ -214,16 +260,32 @@ func (r *fileResource) Create(ctx context.Context, req resource.CreateRequest, r
 		resp.Diagnostics.AddError("Creating parent directory", err.Error())
 		return
 	}
+	// content_wo is null in the plan; its value is only in the config.
+	var config fileModel
+	resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	writeOnly := !config.ContentWO.IsNull()
+
 	// Owner and group are unknown when not configured; ValueString returns ""
 	// for unknown values, meaning "leave unchanged".
-	written, err := writeDesiredContent(target, &plan, mode, plan.Owner.ValueString(), plan.Group.ValueString())
+	var written checksums
+	if writeOnly {
+		written, err = writeFile(target, strings.NewReader(config.ContentWO.ValueString()), mode, plan.Owner.ValueString(), plan.Group.ValueString())
+	} else {
+		written, err = writeDesiredContent(target, &plan, mode, plan.Owner.ValueString(), plan.Group.ValueString())
+	}
 	if err != nil {
 		resp.Diagnostics.AddError("Writing file", err.Error())
 		return
 	}
 	planned := plan.ContentSHA256
+	if writeOnly {
+		resp.Diagnostics.Append(setPrivateJSON(ctx, resp.Private, fileContentWOPrivateKey, written.sha256)...)
+	}
 
-	found, diags := readFile(target, &plan)
+	found, diags := readFile(target, &plan, writeOnly)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -236,7 +298,9 @@ func (r *fileResource) Create(ctx context.Context, req resource.CreateRequest, r
 	// The file exists either way; record it so a failure below taints it
 	// rather than orphaning it.
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
-	resp.Diagnostics.Append(checkWrittenChecksum(&plan, planned, written)...)
+	if !writeOnly {
+		resp.Diagnostics.Append(checkWrittenChecksum(&plan, planned, written)...)
+	}
 }
 
 func (r *fileResource) Read(ctx context.Context, req resource.ReadRequest, resp *resource.ReadResponse) {
@@ -251,7 +315,14 @@ func (r *fileResource) Read(ctx context.Context, req resource.ReadRequest, resp 
 	if resp.Diagnostics.HasError() {
 		return
 	}
-	found, diags := readFile(target, &state)
+	// A resource that uses content_wo has the checksum of what was written
+	// in its private state; its content must never be read into the state.
+	written, diags := getPrivateString(ctx, req.Private, fileContentWOPrivateKey)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	found, diags := readFile(target, &state, written != "")
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -291,14 +362,44 @@ func (r *fileResource) Update(ctx context.Context, req resource.UpdateRequest, r
 	if !plan.Group.IsUnknown() && !plan.Group.Equal(state.Group) {
 		group = plan.Group.ValueString()
 	}
-	written, err := writeDesiredContent(target, &plan, mode, owner, group)
+	var config fileModel
+	resp.Diagnostics.Append(req.Config.Get(ctx, &config)...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	writeOnly := !config.ContentWO.IsNull()
+
+	var written checksums
+	if writeOnly {
+		recorded, diags := getPrivateString(ctx, req.Private, fileContentWOPrivateKey)
+		resp.Diagnostics.Append(diags...)
+		if resp.Diagnostics.HasError() {
+			return
+		}
+		// The same decision as in ModifyPlan: without a new version or
+		// drift, only mode and ownership are applied.
+		if contentWONeedsWrite(&state, plan.ContentWOVersion, recorded) {
+			written, err = writeFile(target, strings.NewReader(config.ContentWO.ValueString()), mode, owner, group)
+			recorded = written.sha256
+		} else {
+			err = applyFileMetadata(target, mode, owner, group)
+		}
+		if err == nil {
+			resp.Diagnostics.Append(setPrivateJSON(ctx, resp.Private, fileContentWOPrivateKey, recorded)...)
+		}
+	} else {
+		written, err = writeDesiredContent(target, &plan, mode, owner, group)
+		if err == nil {
+			resp.Diagnostics.Append(resp.Private.SetKey(ctx, fileContentWOPrivateKey, nil)...)
+		}
+	}
 	if err != nil {
 		resp.Diagnostics.AddError("Writing file", err.Error())
 		return
 	}
 	planned := plan.ContentSHA256
 
-	found, diags := readFile(target, &plan)
+	found, diags := readFile(target, &plan, writeOnly)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
 		return
@@ -309,7 +410,9 @@ func (r *fileResource) Update(ctx context.Context, req resource.UpdateRequest, r
 		return
 	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
-	resp.Diagnostics.Append(checkWrittenChecksum(&plan, planned, written)...)
+	if !writeOnly {
+		resp.Diagnostics.Append(checkWrittenChecksum(&plan, planned, written)...)
+	}
 }
 
 func (r *fileResource) Delete(ctx context.Context, req resource.DeleteRequest, resp *resource.DeleteResponse) {
@@ -393,6 +496,47 @@ func writeFileTo(target string, content io.Reader, mode fs.FileMode, owner, grou
 		return checksums{}, err
 	}
 	return h.sums(), nil
+}
+
+// fileContentWOPrivateKey is the private state key under which the
+// hex-encoded SHA-256 checksum of the content last written from content_wo
+// is kept, as a JSON string. Its presence also marks a resource whose
+// content must not be read into the state.
+const fileContentWOPrivateKey = "content_wo_sha256"
+
+// contentWONeedsWrite reports whether content_wo must be written to the file
+// of the resource whose refreshed prior state is prior, given the planned
+// content_wo_version and the checksum recorded in private state (written,
+// "" if none). It must be: when the version changes (or is not known yet),
+// when nothing was recorded (as after import, or when switching from another
+// content attribute), and when the file on disk no longer has the recorded
+// checksum. A changed content_wo alone is not detected; Terraform keeps no
+// trace of it.
+func contentWONeedsWrite(prior *fileModel, version types.Int64, written string) bool {
+	return version.IsUnknown() ||
+		!version.Equal(prior.ContentWOVersion) ||
+		written == "" ||
+		prior.ContentSHA256.IsNull() || prior.ContentSHA256.IsUnknown() ||
+		prior.ContentSHA256.ValueString() != written
+}
+
+// applyFileMetadata applies mode and ownership to the existing regular file
+// target without touching its content, with the same guarantees as
+// writeFile.
+func applyFileMetadata(target string, mode fs.FileMode, owner, group string) error {
+	f, err := openNoFollow(target, os.O_RDONLY, 0)
+	if err != nil {
+		return explainImmutable(err, target)
+	}
+	defer func() { _ = f.Close() }()
+	info, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	if err := checkRegularFile(target, info); err != nil {
+		return err
+	}
+	return setOwnershipAndMode(f, owner, group, mode)
 }
 
 // writeDesiredContent writes the content configured in m -- content,
@@ -599,9 +743,11 @@ func refreshContent(m *fileModel, content []byte) {
 //   - source: left untouched; the source's contents are never stored, and
 //     drift is detected by comparing content_sha256 with the checksum
 //     computed during plan.
+//   - content_wo (writeOnly): left untouched as well; drift is detected by
+//     comparing content_sha256 with the checksum in private state.
 //   - none (after import): content if the file is UTF-8 text, otherwise
 //     content_base64.
-func readFile(target string, m *fileModel) (found bool, diags diag.Diagnostics) {
+func readFile(target string, m *fileModel, writeOnly bool) (found bool, diags diag.Diagnostics) {
 	info, err := os.Lstat(target)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -637,7 +783,7 @@ func readFile(target string, m *fileModel) (found bool, diags diag.Diagnostics) 
 		return true, diags
 	}
 	var sums checksums
-	if m.Source.IsNull() {
+	if m.Source.IsNull() && !writeOnly {
 		content, err := io.ReadAll(f)
 		if err != nil {
 			diags.AddError("Read failed", err.Error())

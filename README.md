@@ -8,7 +8,7 @@ The provider acts on the machine Terraform runs on. It has no remote-execution m
 
 | Resource | Manages | Import | Drift detection | Requires root |
 |----------|---------|:------:|-----------------|---------------|
-| [`sysutils_file`](./docs/resources/file.md) | A file from text, base64 or a local source file; exposes checksums | Yes, by path | Content, mode, owner, group | Only to set `owner`/`group` or write to system paths |
+| [`sysutils_file`](./docs/resources/file.md) | A file from text, base64, a local source file or a write-only secret kept out of state; exposes checksums | Yes, by path | Content, mode, owner, group | Only to set `owner`/`group` or write to system paths |
 | [`sysutils_remote_file`](./docs/resources/remote_file.md) | A file downloaded from an `http` or `https` URL, like Ansible's `get_url`; size and `sha256`/`sha512` checksum are verified before an atomic rename, redirects never leave https, and sensitive `headers` go to the original host only; the URL is not fetched on refresh | Yes, by path | Content no longer matching the checksum (downloaded again), mode, owner, group; file deleted | Only to set `owner`/`group` or write to system paths |
 | [`sysutils_file_line`](./docs/resources/file_line.md) | One line or a marker-delimited block in an existing file, like Ansible's `lineinfile`/`blockinfile` | Yes, by `path:line` or `path:marker` | Line or block missing or changed | Only for files you can't otherwise write, such as `/etc/hosts` |
 | [`sysutils_ini_value`](./docs/resources/ini_value.md) | One `key = value` setting in a section of an INI-style file (systemd drop-ins, `php.ini`, git config, `sshd_config`), like Ansible's `ini_file`; creates a missing section | Yes, by `path:section:key` | Value changed, key removed, added (with `state = "absent"`) or duplicated | Only for files you can't otherwise write |
@@ -167,14 +167,14 @@ A local user who can write to a directory above a managed path could try to plan
 
 Terraform state holds every attribute in plain text, and so does anything that has read access to your state backend.
 
-- `sysutils_file` stores `content`, `sensitive_content` and `content_base64` verbatim. `sensitive_content` is hidden in plans, which show only the change of `content_sha256`. For `source`, only the path and checksums are stored.
+- `sysutils_file` stores `content`, `sensitive_content` and `content_base64` verbatim. `sensitive_content` is hidden in plans, which show only the change of `content_sha256`. For `source`, only the path and checksums are stored. For the write-only `content_wo` (Terraform 1.11 and later), only the checksums are stored: the value is never in the plan or the state, so it can come from an ephemeral variable or resource.
 - The `sysutils_file` data source stores the file's contents. Don't point it at secrets.
 - `sysutils_file_line` stores the managed line or block, and `sysutils_ini_value` the managed value.
 - `sysutils_template_file` stores the template, its variables and the rendered content. With `sensitive_vars`, the rendered content goes into the sensitive `rendered_sensitive` attribute, so it's hidden in plans, but it is still in state.
 - `sysutils_systemd_unit` stores the unit file's contents.
 - `sysutils_mount` stores its mount options, which also end up in the world-readable `/etc/fstab`. Use `credentials=` files instead of `password=` options for network shares.
 
-Don't manage secrets with these resources unless your state backend encrypts data at rest and access to it is restricted. Marking a value `sensitive` only hides it in plans and CLI output; it is still in state.
+Don't manage secrets with these resources unless your state backend encrypts data at rest and access to it is restricted, or use `content_wo` of `sysutils_file`. Marking a value `sensitive` only hides it in plans and CLI output; it is still in state.
 
 ### Exec output in state
 

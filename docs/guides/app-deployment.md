@@ -156,6 +156,8 @@ resource "sysutils_template_file" "config" {
 
 `sysutils_template_file` renders the template inside the provider, during plan. A syntax error or a missing variable therefore fails the plan, not the apply, and the plan shows the new file's content line by line next to what is on disk. A change made by hand shows up in the next plan, and apply reverts it. Passwords and other secrets go into `sensitive_vars`: the plan then shows only a changed checksum, not the content. See the [`sysutils_template_file`](../resources/template_file.md) page.
 
+`sensitive_vars` only hides secrets in plans; they, and the rendered file, are still in the state. With Terraform 1.11 or later, keep a secret out of the state altogether: put it in a file of its own, written by `sysutils_file` with the write-only `content_wo`, and point the application at that file. The value can come from an ephemeral variable or ephemeral resource, and `content_wo = templatefile(...)` renders a template with it. Terraform can't see a changed value, so increase `content_wo_version` to write a new one. See [Secrets kept out of state](../resources/file.md#secrets-kept-out-of-state).
+
 ## Unit and service
 
 ```terraform

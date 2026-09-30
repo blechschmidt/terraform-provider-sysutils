@@ -152,6 +152,6 @@ Other programs do not take these locks. An edit made by hand or by another tool 
 - `sysutils_ini_value` records the key's actual value, and whether it is present at all, so the plan shows the value changing from what is in the file.
 - `sysutils_hosts_entry` records the managed line's actual hostnames and comment, so the plan shows them changing from what is in the file.
 
-When the content is sensitive — `sensitive_content` of `sysutils_file`, `sensitive_vars` of `sysutils_template_file`, or a sensitive variable used in `content`, `line` or `block` — Terraform hides it and the plan shows only the change to the `content_sha256` checksum (and `content_md5` where available). Every whole-file and line resource exposes `content_sha256` for this purpose. A sensitive `value` of `sysutils_ini_value` is shown as `(sensitive value)`, which still marks it as changed.
+When the content is sensitive — `sensitive_content` of `sysutils_file`, `sensitive_vars` of `sysutils_template_file`, or a sensitive variable used in `content`, `line` or `block` — Terraform hides it and the plan shows only the change to the `content_sha256` checksum (and `content_md5` where available). Every whole-file and line resource exposes `content_sha256` for this purpose. With `content_wo` of `sysutils_file` (Terraform 1.11 and later), the content is not in the plan at all: a write shows as `content_sha256` changing to `(known after apply)`. A sensitive `value` of `sysutils_ini_value` is shown as `(sensitive value)`, which still marks it as changed.
 
 {{ .SchemaMarkdown | trimspace }}
