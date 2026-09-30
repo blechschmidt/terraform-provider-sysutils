@@ -75,7 +75,7 @@ const helloPolicy = "hello:\n  Installed: (none)\n  Candidate: 2.10-3\n  Version
 func TestAptBackend(t *testing.T) {
 	ctx := context.Background()
 	aptGet := "-y -q -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold -o DPkg::Lock::Timeout=300"
-	dpkgQuery := "dpkg-query --show --showformat=${Package}\\t${db:Status-Abbrev}\\t${Version}\\n -- "
+	dpkgQuery := "dpkg-query --show --showformat=${Package}\\t${db:Status-Abbrev}\\t${Version}\\t${Architecture}\\n -- "
 
 	t.Run("query installed", func(t *testing.T) {
 		s := &scriptedRunner{rules: []scriptedRule{{prefix: "dpkg-query", stdout: "hello\tii \t2.10-3build1\n"}}}

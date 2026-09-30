@@ -33,6 +33,8 @@ type fakePackageManager struct {
 	calls    []string
 	// updateErr, if set, is returned by UpdateCache.
 	updateErr error
+	// inspectErr, if set, is returned by Inspect.
+	inspectErr error
 }
 
 func newFakePackageManager(kind string) *fakePackageManager {
@@ -144,6 +146,22 @@ func (f *fakePackageManager) Remove(_ context.Context, name string) error {
 	return nil
 }
 
+// Inspect reports installed packages as built for "amd64", and the newest
+// available version as the candidate.
+func (f *fakePackageManager) Inspect(_ context.Context, name string) (packageDetails, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.record("inspect %s", name)
+	if f.inspectErr != nil {
+		return packageDetails{}, f.inspectErr
+	}
+	d := packageDetails{Candidate: f.newest(name)}
+	if v, ok := f.installed[name]; ok {
+		d.packageInfo = packageInfo{Installed: true, Version: v, Architecture: "amd64"}
+	}
+	return d, nil
+}
+
 func (f *fakePackageManager) UpdateCache(_ context.Context) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -183,7 +201,7 @@ func (f *fakePackageManager) changes() []string {
 	defer f.mu.Unlock()
 	var out []string
 	for _, c := range f.calls {
-		if !strings.HasPrefix(c, "query ") && !strings.HasPrefix(c, "uptodate ") {
+		if !strings.HasPrefix(c, "query ") && !strings.HasPrefix(c, "uptodate ") && !strings.HasPrefix(c, "inspect ") {
 			out = append(out, c)
 		}
 	}

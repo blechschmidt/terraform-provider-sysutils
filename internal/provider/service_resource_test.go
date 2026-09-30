@@ -172,7 +172,7 @@ func TestServiceBackendCommands(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := (serviceStatus{Found: true, Unit: "ssh.service", Enabled: false, Running: true, Detail: `is-enabled "disabled", is-active "active"`}); st != want {
+	if want := (serviceStatus{Found: true, Unit: "ssh.service", Enabled: false, Running: true, EnabledState: "disabled", ActiveState: "active", Detail: `is-enabled "disabled", is-active "active"`}); st != want {
 		t.Errorf("Status = %+v, want %+v", st, want)
 	}
 	if err := m.SetEnabled(ctx, st.Unit, true); err != nil {
@@ -227,7 +227,7 @@ func TestServiceBackendCommands(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := (serviceStatus{Found: true, Unit: "crond", Enabled: true, Running: false, Detail: "in runlevel boot, stopped"}); st != want {
+	if want := (serviceStatus{Found: true, Unit: "crond", Enabled: true, Running: false, EnabledState: "enabled", ActiveState: "stopped", Detail: "in runlevel boot, stopped"}); st != want {
 		t.Errorf("Status = %+v, want %+v", st, want)
 	}
 	if err := m.SetEnabled(ctx, "crond", false); err != nil {

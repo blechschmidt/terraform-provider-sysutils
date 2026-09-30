@@ -252,6 +252,23 @@ func (d *rootedDataSource) root() *fsRoot {
 	return d.fsRoot
 }
 
+// hostOnlyDataSource is the data source counterpart of hostOnlyResource:
+// its check refuses to read when root_dir is set, since the data source
+// would describe the running host rather than the tree below root_dir.
+type hostOnlyDataSource struct {
+	fsRoot *fsRoot
+}
+
+// checkHostOnly adds an error to diags if root_dir is set.
+func (d *hostOnlyDataSource) checkHostOnly(diags *diag.Diagnostics) {
+	if d.fsRoot.isHost() {
+		return
+	}
+	diags.AddError("Not supported with root_dir",
+		fmt.Sprintf("This data source reads the running host, not files below root_dir, so it cannot be used with root_dir = %q. "+
+			"Read it through a separate provider configuration without root_dir, for example through a provider alias.", d.fsRoot.String()))
+}
+
 func (p *sysutilsProvider) Resources(_ context.Context) []func() resource.Resource {
 	return []func() resource.Resource{
 		NewFileResource,
@@ -291,5 +308,7 @@ func (p *sysutilsProvider) DataSources(_ context.Context) []func() datasource.Da
 		NewUserDataSource,
 		NewGroupDataSource,
 		NewHostDataSource,
+		NewPackageDataSource,
+		NewServiceDataSource,
 	}
 }

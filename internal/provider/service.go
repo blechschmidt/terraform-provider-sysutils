@@ -114,8 +114,17 @@ type serviceStatus struct {
 	Enabled bool
 	// Running reports whether the service is running.
 	Running bool
-	// Detail is the init system's own word for the enablement and active
-	// state, such as "static/inactive", for error messages.
+	// EnabledState is the init system's own word for the enablement: what
+	// "systemctl is-enabled" prints, such as "enabled", "static" or
+	// "masked"; with OpenRC "enabled" or "disabled" for the runlevel.
+	EnabledState string
+	// ActiveState is the init system's own word for the run state: what
+	// "systemctl is-active" prints, such as "active" or "failed"; with
+	// OpenRC the status "rc-service status" reports, such as "started",
+	// "stopped" or "crashed".
+	ActiveState string
+	// Detail combines both, such as "is-enabled \"static\", is-active
+	// \"inactive\"", for error messages.
 	Detail string
 }
 
@@ -264,11 +273,13 @@ func (s systemdServices) Status(ctx context.Context, name string) (serviceStatus
 		return serviceStatus{}, err
 	}
 	return serviceStatus{
-		Found:   true,
-		Unit:    unit,
-		Enabled: unitFileEnabled(enabled),
-		Running: unitRunState(active) == unitStateRunning,
-		Detail:  fmt.Sprintf("is-enabled %q, is-active %q", enabled, active),
+		Found:        true,
+		Unit:         unit,
+		Enabled:      unitFileEnabled(enabled),
+		Running:      unitRunState(active) == unitStateRunning,
+		EnabledState: enabled,
+		ActiveState:  active,
+		Detail:       fmt.Sprintf("is-enabled %q, is-active %q", enabled, active),
 	}, nil
 }
 
@@ -407,12 +418,19 @@ func (o openrcServices) Status(ctx context.Context, name string) (serviceStatus,
 	if enabled {
 		inRunlevel = "in runlevel " + o.runlevel
 	}
+	// Without a status line, only the exit status is known.
+	active := ""
+	if line := firstLine(res.Stdout.String()); line != "" {
+		active = strings.TrimPrefix(strings.TrimSpace(strings.TrimPrefix(line, "*")), "status: ")
+	}
 	return serviceStatus{
-		Found:   true,
-		Unit:    name,
-		Enabled: enabled,
-		Running: res.ExitCode == 0,
-		Detail:  fmt.Sprintf("%s, %s", inRunlevel, strings.TrimPrefix(strings.TrimSpace(strings.TrimPrefix(status, "*")), "status: ")),
+		Found:        true,
+		Unit:         name,
+		Enabled:      enabled,
+		Running:      res.ExitCode == 0,
+		EnabledState: verbFor(enabled, "enabled", "disabled"),
+		ActiveState:  active,
+		Detail:       fmt.Sprintf("%s, %s", inRunlevel, strings.TrimPrefix(strings.TrimSpace(strings.TrimPrefix(status, "*")), "status: ")),
 	}, nil
 }
 

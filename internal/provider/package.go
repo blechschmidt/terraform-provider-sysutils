@@ -15,6 +15,7 @@ import (
 	"os/user"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -202,6 +203,21 @@ type packageInfo struct {
 	// Version is the installed version, in the manager's own format. Empty
 	// if the package is not installed.
 	Version string
+	// Architecture is that of the installed package, such as "amd64",
+	// "x86_64" or "noarch". Query leaves it empty for apk, whose package
+	// database query does not report it; Inspect fills it in.
+	Architecture string
+}
+
+// packageDetails is what the sysutils_package data source reports: the
+// installed package, and the version the local package index offers.
+type packageDetails struct {
+	packageInfo
+	// Candidate is the version that installing or upgrading the package
+	// would select from the local package index: apt's candidate, or the
+	// newest version in the enabled repositories with dnf, yum and apk.
+	// Empty if the index has no such package, or has not been downloaded.
+	Candidate string
 }
 
 // packageManager is a package manager backend. Implementations are not
@@ -226,6 +242,10 @@ type packageManager interface {
 	Remove(ctx context.Context, name string) error
 	// UpdateCache refreshes the package index from the repositories.
 	UpdateCache(ctx context.Context) error
+	// Inspect reads the package database and the local package index. Like
+	// Query, it never changes the host: it neither refreshes the index nor
+	// takes a lock, and works without root privileges.
+	Inspect(ctx context.Context, name string) (packageDetails, error)
 }
 
 // packageConfig is the provider-level configuration of sysutils_package.
@@ -461,7 +481,7 @@ func (a aptBackend) aptGet(ctx context.Context, cmd string, extra ...string) err
 }
 
 func (a aptBackend) Query(ctx context.Context, name string) (packageInfo, error) {
-	argv := []string{"dpkg-query", "--show", "--showformat=${Package}\\t${db:Status-Abbrev}\\t${Version}\\n", "--", name}
+	argv := []string{"dpkg-query", "--show", "--showformat=${Package}\\t${db:Status-Abbrev}\\t${Version}\\t${Architecture}\\n", "--", name}
 	res, err := a.exec(ctx, packageQueryTimeout, argv...)
 	if err != nil {
 		return packageInfo{}, err
@@ -476,7 +496,8 @@ func (a aptBackend) Query(ctx context.Context, name string) (packageInfo, error)
 	return info, nil
 }
 
-// parseDpkgQuery parses "package\tstatus\tversion" lines. A package counts
+// parseDpkgQuery parses "package\tstatus\tversion\tarchitecture" lines; the
+// architecture is optional. A package counts
 // as installed if its status is installed, or installed with triggers
 // awaited or pending. Half-installed or half-configured packages do not, so
 // that the next apply repairs them. With several architectures installed,
@@ -484,14 +505,18 @@ func (a aptBackend) Query(ctx context.Context, name string) (packageInfo, error)
 func parseDpkgQuery(out, name string) packageInfo {
 	for _, line := range strings.Split(out, "\n") {
 		fields := strings.Split(line, "\t")
-		if len(fields) != 3 || fields[0] != name {
+		if len(fields) < 3 || len(fields) > 4 || fields[0] != name {
 			continue
 		}
 		status := fields[1]
 		if len(status) < 2 || !strings.ContainsRune("iWt", rune(status[1])) {
 			continue
 		}
-		return packageInfo{Installed: true, Version: strings.TrimSpace(fields[2])}
+		info := packageInfo{Installed: true, Version: strings.TrimSpace(fields[2])}
+		if len(fields) == 4 {
+			info.Architecture = strings.TrimSpace(fields[3])
+		}
+		return info
 	}
 	return packageInfo{}
 }
@@ -637,6 +662,36 @@ func (a aptBackend) UpdateCache(ctx context.Context) error {
 	return a.change(ctx, "apt-get", "update", "-q", "-o", "DPkg::Lock::Timeout="+aptLockTimeout)
 }
 
+// Inspect reports apt's candidate version from "apt-cache policy". A name
+// that apt resolves to no package, or takes for a pattern that selects
+// other packages, has no candidate: see policy.
+func (a aptBackend) Inspect(ctx context.Context, name string) (packageDetails, error) {
+	info, err := a.Query(ctx, name)
+	if err != nil {
+		return packageDetails{}, err
+	}
+	argv := []string{"apt-cache", "policy", "--", name}
+	res, err := a.exec(ctx, packageQueryTimeout, argv...)
+	if err != nil {
+		return packageDetails{}, err
+	}
+	if res.ExitCode != 0 {
+		return packageDetails{}, packageCommandError(argv, res)
+	}
+	out := res.Stdout.String()
+	headers := aptPolicyHeaders(out)
+	if len(headers) == 0 {
+		return packageDetails{packageInfo: info}, nil
+	}
+	for _, h := range headers {
+		if !isAptPolicyHeaderFor(h, name) {
+			return packageDetails{packageInfo: info}, nil
+		}
+	}
+	_, candidate := parseAptPolicy(out)
+	return packageDetails{packageInfo: info, Candidate: candidate}, nil
+}
+
 // rpmBackend manages packages with dnf or yum, and queries them with rpm.
 // Package arguments always follow "--", which dnf4, dnf5 and yum accept, so
 // that they can never be taken for options.
@@ -647,9 +702,9 @@ type rpmBackend struct {
 
 func (r rpmBackend) Kind() string { return r.tool }
 
-// rpmQueryFormat prints the name and [epoch:]version-release of each
-// matching package.
-const rpmQueryFormat = `%{NAME}\t%|EPOCH?{%{EPOCH}:}:{}|%{VERSION}-%{RELEASE}\n`
+// rpmQueryFormat prints the name, [epoch:]version-release and architecture
+// of each matching package.
+const rpmQueryFormat = `%{NAME}\t%|EPOCH?{%{EPOCH}:}:{}|%{VERSION}-%{RELEASE}\t%{ARCH}\n`
 
 func (r rpmBackend) Query(ctx context.Context, name string) (packageInfo, error) {
 	argv := []string{"rpm", "--query", "--queryformat", rpmQueryFormat, "--", name}
@@ -668,15 +723,21 @@ func (r rpmBackend) Query(ctx context.Context, name string) (packageInfo, error)
 	return info, nil
 }
 
-// parseRPMQuery parses "name\tversion" lines. rpm -q also matches
-// name-version patterns, so lines for other packages are ignored. With
-// several architectures installed, the first one is reported.
+// parseRPMQuery parses "name\tversion\tarchitecture" lines; the
+// architecture is optional. rpm -q also matches name-version patterns, so
+// lines for other packages are ignored. With several architectures
+// installed, the first one is reported.
 func parseRPMQuery(out, name string) packageInfo {
 	for _, line := range strings.Split(out, "\n") {
-		n, v, ok := strings.Cut(line, "\t")
-		if ok && n == name && v != "" {
-			return packageInfo{Installed: true, Version: strings.TrimSpace(v)}
+		fields := strings.Split(line, "\t")
+		if len(fields) < 2 || len(fields) > 3 || fields[0] != name || fields[1] == "" {
+			continue
 		}
+		info := packageInfo{Installed: true, Version: strings.TrimSpace(fields[1])}
+		if len(fields) == 3 {
+			info.Architecture = strings.TrimSpace(fields[2])
+		}
+		return info
 	}
 	return packageInfo{}
 }
@@ -738,6 +799,79 @@ func (r rpmBackend) Remove(ctx context.Context, name string) error {
 
 func (r rpmBackend) UpdateCache(ctx context.Context) error {
 	return r.change(ctx, r.tool, "makecache", "-q")
+}
+
+// rpmRepoQueryFormat prints the name, architecture and [epoch:]version-
+// release of each available package. dnf5 does not expand escapes such as
+// "\t" in query formats, so the tab and newline are literal.
+const rpmRepoQueryFormat = "%{name}\t%{arch}\t%{evr}\n"
+
+// Inspect finds the newest available version with "repoquery" in cache-only
+// mode (-C), which reads the downloaded metadata without refreshing it, as
+// dnf otherwise would once it has expired. Without downloaded metadata
+// there is no candidate. With several architectures available, the
+// installed one is preferred, then noarch and the host's own.
+func (r rpmBackend) Inspect(ctx context.Context, name string) (packageDetails, error) {
+	info, err := r.Query(ctx, name)
+	if err != nil {
+		return packageDetails{}, err
+	}
+	argv := []string{r.tool, "repoquery", "-C", "-q", "--available", "--latest-limit=1", "--queryformat", rpmRepoQueryFormat, "--", name}
+	res, err := r.exec(ctx, packageQueryTimeout, argv...)
+	if err != nil {
+		return packageDetails{}, err
+	}
+	if res.ExitCode != 0 {
+		// dnf4 prefixes the message with "Error: ", dnf5 does not.
+		if strings.Contains(res.Stderr.String()+res.Stdout.String(), "Cache-only enabled but no cache") {
+			return packageDetails{packageInfo: info}, nil
+		}
+		return packageDetails{}, packageCommandError(argv, res)
+	}
+	return packageDetails{packageInfo: info, Candidate: pickRPMCandidate(res.Stdout.String(), name, info.Architecture)}, nil
+}
+
+// pickRPMCandidate returns the version of name in "name\tarch\tevr" lines
+// of repoquery output, preferring the architecture arch (that of the
+// installed package, if any), then noarch and the host's architecture,
+// then the first line. repoquery also matches name-version patterns, so
+// lines for other packages are ignored.
+func pickRPMCandidate(out, name, arch string) string {
+	versions := map[string]string{}
+	first := ""
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Split(strings.TrimRight(line, "\r"), "\t")
+		if len(fields) != 3 || fields[0] != name || fields[2] == "" {
+			continue
+		}
+		if _, ok := versions[fields[1]]; !ok {
+			versions[fields[1]] = fields[2]
+		}
+		if first == "" {
+			first = fields[2]
+		}
+	}
+	for _, a := range []string{arch, "noarch", rpmArch(runtime.GOARCH)} {
+		if v, ok := versions[a]; ok && a != "" {
+			return v
+		}
+	}
+	return first
+}
+
+// rpmArch maps a Go architecture to RPM's name for it.
+func rpmArch(goarch string) string {
+	switch goarch {
+	case "amd64":
+		return "x86_64"
+	case "arm64":
+		return "aarch64"
+	case "386":
+		return "i686"
+	case "arm":
+		return "armv7hl"
+	}
+	return goarch // ppc64le, s390x and riscv64 are the same
 }
 
 // apkBackend manages packages with Alpine's apk. Package arguments always
@@ -821,4 +955,73 @@ func (a apkBackend) Remove(ctx context.Context, name string) error {
 
 func (a apkBackend) UpdateCache(ctx context.Context) error {
 	return a.change(ctx, "apk", "update", "--quiet", "--no-progress")
+}
+
+// Inspect reads the architecture of an installed package from "apk list
+// --installed", and the candidate from "apk policy", which lists every
+// version the installed database and the cached indexes know of, oldest
+// first.
+func (a apkBackend) Inspect(ctx context.Context, name string) (packageDetails, error) {
+	info, err := a.Query(ctx, name)
+	if err != nil {
+		return packageDetails{}, err
+	}
+	if info.Installed {
+		argv := []string{"apk", "list", "--installed", "--", name}
+		res, err := a.exec(ctx, packageQueryTimeout, argv...)
+		if err != nil {
+			return packageDetails{}, err
+		}
+		if res.ExitCode != 0 {
+			return packageDetails{}, packageCommandError(argv, res)
+		}
+		info.Architecture = parseApkListArch(res.Stdout.String(), name+"-"+info.Version)
+	}
+	argv := []string{"apk", "policy", "--", name}
+	res, err := a.exec(ctx, packageQueryTimeout, argv...)
+	if err != nil {
+		return packageDetails{}, err
+	}
+	if res.ExitCode != 0 {
+		return packageDetails{}, packageCommandError(argv, res)
+	}
+	return packageDetails{packageInfo: info, Candidate: parseApkPolicy(res.Stdout.String(), name)}, nil
+}
+
+// parseApkListArch returns the architecture of pkgver ("name-version") from
+// "apk list" lines such as "curl-8.9.1-r0 x86_64 {curl} (curl) [installed]".
+func parseApkListArch(out, pkgver string) string {
+	for _, line := range strings.Split(out, "\n") {
+		fields := strings.Fields(line)
+		if len(fields) >= 2 && fields[0] == pkgver {
+			return fields[1]
+		}
+	}
+	return ""
+}
+
+// parseApkPolicy returns the newest version of name that "apk policy"
+// output lists in an untagged repository, the version "apk add --upgrade"
+// would install. Versions only in the installed database
+// ("lib/apk/db/installed") have no repository, and those only in tagged
+// repositories ("@edge https://...") are installed only if asked for with
+// "name@tag".
+func parseApkPolicy(out, name string) string {
+	inPackage, version, candidate := false, "", ""
+	for _, line := range strings.Split(out, "\n") {
+		trimmed := strings.TrimSpace(line)
+		indent := len(line) - len(strings.TrimLeft(line, " \t"))
+		switch {
+		case trimmed == "":
+		case indent == 0:
+			inPackage = trimmed == name+" policy:"
+		case !inPackage:
+		case strings.HasSuffix(trimmed, ":") && !strings.Contains(trimmed, " "):
+			version = strings.TrimSuffix(trimmed, ":")
+		case version == "" || strings.HasPrefix(trimmed, "@") || strings.HasSuffix(trimmed, "lib/apk/db/installed"):
+		default:
+			candidate = version
+		}
+	}
+	return candidate
 }

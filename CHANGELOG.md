@@ -4,6 +4,12 @@ All notable changes to this provider are listed here. Versions follow [semantic 
 
 ## Unreleased
 
+### New data sources
+
+- [`sysutils_package`](./docs/data-sources/package.md) reads whether an OS package is installed, its `version` and `architecture`, and the `available_version` the local package index offers (apt's candidate, or the newest version in the repositories with dnf, yum and apk), with the backends and detection of the `sysutils_package` resource. It only runs read-only queries and needs no root; dnf and yum query their metadata in cache-only mode, so that it isn't downloaded when it has expired. `refresh_cache = true` refreshes the index first, taking the provider's package-manager lock, at most once per provider run.
+- [`sysutils_service`](./docs/data-sources/service.md) reads whether a service `exists`, is `enabled` and is `running`, its primary `unit` name and the init system's own `enabled_state` and `active_state`, with the systemd and OpenRC backends of the `sysutils_service` resource. It needs no root. Where neither systemd nor OpenRC runs, as in most containers or with SysV init, it still succeeds: `init_system` reports what runs (`sysvinit` or null), `supported` is false and the service attributes are null.
+- Both refuse to read when the provider's `root_dir` is set, since they describe the running host.
+
 ### Tests
 
 - The [upgrade tests](./README.md#upgrade-tests) now cover every resource: `sysutils_firewall_rule` and `sysutils_swap`, the two that v1.1.0's `upgrade_local_acc_test.go` left out, are upgraded from v1.1.0 on the Terraform Registry (`upgrade_acc_test.go`) and from a local baseline build (`upgrade_local_acc_test.go`, with `SYSUTILS_UPGRADE_FROM_REF`). The firewall tests run Terraform, and with it the baseline provider, inside a private network namespace; the swap tests use `persist = false` and leave `/etc/fstab` alone.
