@@ -1,0 +1,73 @@
+---
+page_title: "Cookbook: Deploying an application"
+subcategory: "Cookbook"
+description: |-
+  Deploy a release tarball as a systemd service: service account, versioned release directories with an atomic symlink switch, a templated configuration file, and restarts when either changes.
+---
+
+# Cookbook: Deploying an application
+
+This recipe deploys `myapp`, a service shipped as a tarball, and keeps it running. It sets up:
+
+- a system account and a private state directory;
+- each release unpacked into a directory of its own, with a symlink to the active one;
+- a configuration file rendered from a template;
+- a systemd unit that runs the service as its account, with restrictions;
+- a restart whenever the release or the configuration changes.
+
+Upgrading is then `terraform apply -var app_version=1.5.0`, and the plan shows exactly what the upgrade changes. This recipe uses [`sysutils_archive_extract`](../resources/archive_extract.md), [`sysutils_symlink`](../resources/symlink.md), [`sysutils_template_file`](../resources/template_file.md), [`sysutils_systemd_unit`](../resources/systemd_unit.md) and [`sysutils_service`](../resources/service.md). It requires root and systemd.
+
+The complete configuration is in [`examples/guides/app-deployment`](https://github.com/blechschmidt/terraform-provider-sysutils/tree/main/examples/guides/app-deployment). It includes a stand-in tarball, so you can apply it as it is on a test machine.
+
+{{ tffile "examples/guides/app-deployment/versions.tf" }}
+
+{{ tffile "examples/guides/app-deployment/variables.tf" }}
+
+## Account and state directory
+
+{{ tffile "examples/guides/app-deployment/account.tf" }}
+
+`create_home = false` keeps `useradd` from creating the home directory with its default mode and a copy of `/etc/skel`. `sysutils_directory.state` creates it instead, with mode `0700`. Its `path` refers to the user's `home`, so the two can't drift apart. The [service account guide](./service-account.md) explains the ownership choices in more detail.
+
+## Releases
+
+{{ tffile "examples/guides/app-deployment/release.tf" }}
+
+**The archive is checked before anything is extracted.** `sysutils_archive_extract` refuses entries that would land outside `destination`, links that point outside it, and archives above `max_size` (1 GiB after decompression by default) or `max_entries`. It reads the tarball during every plan. A rebuilt tarball with the same version therefore shows up as a change of `archive_sha256` and is extracted again. Files deleted or changed below the release directory show up in `drifted_entries`.
+
+**Upgrades switch atomically.** A new `app_version` changes `destination`, which forces a new resource. With `create_before_destroy`, Terraform:
+
+1. extracts the new release into `/opt/myapp/releases/1.5.0`;
+2. points `/opt/myapp/current` at it, with one `rename`, so the service never sees a missing or half-written release;
+3. restarts the service (see below);
+4. deletes `/opt/myapp/releases/1.4.2`, removing exactly the files it extracted.
+
+Rolling back works the same way, with the old version. `/opt/myapp`, which `sysutils_directory.releases` creates as a missing parent, gets mode `0755` and is left in place on destroy; manage it with a `sysutils_directory` of its own if that matters. Destroy removes only the extracted files and the release directory, if it is empty then. Anything the service wrote there stays.
+
+## Configuration
+
+{{ tffile "examples/guides/app-deployment/config.tf" }}
+
+`sysutils_template_file` renders the template inside the provider, during plan. A syntax error or a missing variable therefore fails the plan, not the apply, and the plan shows the new file's content line by line next to what is on disk. A change made by hand shows up in the next plan, and apply reverts it. Passwords and other secrets go into `sensitive_vars`: the plan then shows only a changed checksum, not the content. See the [`sysutils_template_file`](../resources/template_file.md) page.
+
+## Unit and service
+
+{{ tffile "examples/guides/app-deployment/service.tf" }}
+
+**Two resources, two jobs.** `sysutils_systemd_unit` writes the unit file, runs `systemctl daemon-reload`, and restarts a running unit when the file changes. `sysutils_service` decides whether the service is enabled and running. `enabled` and `state` are set on only one of them, so they never undo each other's changes. `sysutils_service` refers to the unit's name, so the unit file exists before the service is started.
+
+**Restarting on the right changes.** `restart_on_change` holds values whose change restarts the service. Here these are the symlink's target, which changes with every release, and the configuration's checksum. A restart only happens after the resources those values come from have been updated. The service therefore always starts with the new release and the new configuration together.
+
+**The unit limits the service.** It runs as `myapp`. `ProtectSystem=strict` mounts the whole file system read-only for it, except `ReadWritePaths`, and `NoNewPrivileges` stops it from gaining privileges through setuid programs. Even a compromised service can't change its own code or configuration, which belong to root.
+
+## Upgrading
+
+```shell
+cp build/myapp-1.5.0.tar.gz files/
+terraform plan -var app_version=1.5.0
+terraform apply -var app_version=1.5.0
+```
+
+The plan lists the new release to be extracted, the old one to be destroyed, the symlink's new target, an updated `ExecStart` if you changed the unit, and the service's `restart_on_change`. Nothing on the host changes until you apply.
+
+On destroy, the service keeps running: destroying a `sysutils_service` changes nothing. `sysutils_systemd_unit` then stops and disables the unit and removes its file. To stop the service first, apply `state = "stopped"` before destroying.

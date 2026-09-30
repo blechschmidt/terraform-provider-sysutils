@@ -85,4 +85,12 @@ docs-check:
 		exit 1; \
 	fi
 
-.PHONY: build install test testacc testacc-docker testacc-docker-matrix test-docker e2e coverage lint docs docs-check
+# Check that every configuration below examples/ is formatted and passes
+# terraform validate against the provider built from this checkout
+# (dev_overrides), that templates/ has no inline HCL, and that the
+# terraform blocks of README.md are excerpts of examples/. Plans and
+# applies nothing, so it needs neither root nor network access. Run by CI.
+examples-check:
+	TF_CLI=terraform scripts/check-examples.sh
+
+.PHONY: build install test testacc testacc-docker testacc-docker-matrix test-docker e2e coverage lint docs docs-check examples-check

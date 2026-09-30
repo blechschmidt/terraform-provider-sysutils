@@ -60,15 +60,7 @@ terraform {
 provider "sysutils" {}
 ```
 
-The only provider argument is the optional `root_dir`. It makes the file, file line, template file, directory, symlink, cron job and package repository resources and the file and directory data sources work inside a directory tree, as if in a chroot, for example to build a container root filesystem:
-
-```terraform
-provider "sysutils" {
-  root_dir = "/srv/images/web/rootfs" # "/etc/hosts" means /srv/images/web/rootfs/etc/hosts
-}
-```
-
-Symlinks in the tree are resolved inside it: absolute link targets are relative to `root_dir`, and a link that leads above `root_dir` is an error. The mount, sysctl, kernel module, service, package and SSH authorized key resources change the running host and refuse to plan with `root_dir` set, as does `sysutils_package_repository` with `refresh_cache = true`. See [Root Directory](./docs/index.md#root-directory).
+The only provider argument is the optional `root_dir`. With it, the resources that write files treat a directory tree as `/`, like a chroot, for example to build a container root filesystem. Resources that change the running system refuse to plan with it. See [Image trees, dry runs and parallel applies](./docs/guides/root-dir-plans-and-locking.md) for a worked example and [Root Directory](./docs/index.md#root-directory) for the details.
 
 ### Requirements
 
@@ -78,60 +70,55 @@ Symlinks in the tree are resolved inside it: absolute link targets are relative 
 
 ## Quick example
 
+Administrator accounts with their SSH keys, from the [bootstrapping recipe](./docs/guides/bootstrap-host.md):
+
 ```terraform
-resource "sysutils_group" "app" {
-  name   = "appsvc"
-  system = true
-}
-
-resource "sysutils_user" "app" {
-  name        = "appsvc"
-  gid         = sysutils_group.app.gid
-  system      = true
-  shell       = "/usr/sbin/nologin"
-  create_home = false
-}
-
-resource "sysutils_directory" "app" {
-  path  = "/srv/app"
-  mode  = "0750"
-  owner = "root"
-  group = sysutils_group.app.name
-}
-
-resource "sysutils_file" "app_config" {
-  path    = "${sysutils_directory.app.path}/app.conf"
-  content = "listen = 127.0.0.1:8080\n"
-  mode    = "0640"
-  owner   = "root"
-  group   = sysutils_group.app.name
-}
-
-resource "sysutils_symlink" "app_config_link" {
-  path   = "/etc/app.conf"
-  target = sysutils_file.app_config.path
-}
-
-resource "sysutils_file_line" "app_host" {
-  path = "/etc/hosts"
-  line = "10.0.0.5 db.internal db"
-}
-
-resource "sysutils_exec" "reload" {
-  command = ["/usr/bin/systemctl", "reload-or-restart", "app"]
-  triggers = {
-    # Re-run whenever the configuration changes.
-    config = sysutils_file.app_config.content_sha256
+# Administrators: user name => OpenSSH public key.
+locals {
+  admins = {
+    alice = file("${path.module}/keys/alice.pub")
   }
+}
+
+# Members of "ops" may use sudo.
+resource "sysutils_group" "ops" {
+  name = "ops"
+}
+
+resource "sysutils_user" "admin" {
+  for_each = local.admins
+
+  name        = each.key
+  shell       = "/bin/bash"
+  create_home = true
+  groups      = [sysutils_group.ops.name]
+}
+
+resource "sysutils_ssh_authorized_key" "admin" {
+  for_each = local.admins
+
+  # Referencing the user creates the account and its home directory first.
+  user = sysutils_user.admin[each.key].name
+  key  = each.value
 }
 ```
 
-The [service account guide](./docs/guides/service-account.md) walks through a complete version of this setup, including drift detection, upgrades via symlink and importing an existing installation.
+## Cookbook
+
+Each guide solves a common job end to end and explains why the configuration looks the way it does. Their configurations are in [`examples/guides`](./examples/guides).
+
+- [Bootstrapping a host](./docs/guides/bootstrap-host.md): base packages and services, administrator accounts, SSH keys and sudo.
+- [Hardening a host](./docs/guides/hardening.md): kernel parameters, disabled kernel modules, SSH settings, file modes and a permission audit.
+- [Deploying an application](./docs/guides/app-deployment.md): versioned releases from a tarball, a templated configuration, a systemd unit and restarts on change.
+- [Image trees, dry runs and parallel applies](./docs/guides/root-dir-plans-and-locking.md): `root_dir`, plans as check mode and drift report, and how the provider locks shared files.
+- [Provisioning a service account and its files](./docs/guides/service-account.md): directory ownership and modes, upgrades through a symlink, and importing an existing installation.
+
+For a whole service host in one stack, see [`examples/complete`](./examples/complete).
 
 ## Documentation
 
 - [Provider overview and security model](./docs/index.md)
-- [Guide: provisioning a service account and its files](./docs/guides/service-account.md)
+- [Cookbook guides](#cookbook)
 - Resources: [`sysutils_file`](./docs/resources/file.md), [`sysutils_file_line`](./docs/resources/file_line.md), [`sysutils_ini_value`](./docs/resources/ini_value.md), [`sysutils_hosts_entry`](./docs/resources/hosts_entry.md), [`sysutils_template_file`](./docs/resources/template_file.md), [`sysutils_directory`](./docs/resources/directory.md), [`sysutils_symlink`](./docs/resources/symlink.md), [`sysutils_archive_extract`](./docs/resources/archive_extract.md), [`sysutils_user`](./docs/resources/user.md), [`sysutils_group`](./docs/resources/group.md), [`sysutils_systemd_unit`](./docs/resources/systemd_unit.md), [`sysutils_service`](./docs/resources/service.md), [`sysutils_mount`](./docs/resources/mount.md), [`sysutils_swap`](./docs/resources/swap.md), [`sysutils_sysctl`](./docs/resources/sysctl.md), [`sysutils_kernel_module`](./docs/resources/kernel_module.md), [`sysutils_timezone`](./docs/resources/timezone.md), [`sysutils_locale`](./docs/resources/locale.md), [`sysutils_ssh_authorized_key`](./docs/resources/ssh_authorized_key.md), [`sysutils_cron_job`](./docs/resources/cron_job.md), [`sysutils_firewall_rule`](./docs/resources/firewall_rule.md), [`sysutils_package`](./docs/resources/package.md), [`sysutils_package_repository`](./docs/resources/package_repository.md), [`sysutils_exec`](./docs/resources/exec.md)
 - Data sources: [`sysutils_file`](./docs/data-sources/file.md), [`sysutils_directory`](./docs/data-sources/directory.md), [`sysutils_user`](./docs/data-sources/user.md), [`sysutils_group`](./docs/data-sources/group.md)
 - [Examples](./examples), including [`examples/complete`](./examples/complete), a whole service host in one stack
@@ -201,6 +188,7 @@ Building requires Go (see `go.mod` for the version). Acceptance tests and doc ge
 | `make coverage` | Write a test-coverage report to `coverage.html`. |
 | `make docs` | Format the examples and regenerate `docs/`. |
 | `make docs-check` | Fail if `docs/` is out of date or the examples aren't formatted. Run in CI. |
+| `make examples-check` | Run `terraform validate` on every example directory with the provider built from the checkout, and check that all HCL in the docs and in this README comes from `examples/`. Needs neither root nor network access. Run in CI. |
 
 ### Acceptance tests
 
@@ -285,6 +273,14 @@ Everything under `docs/` is generated by [terraform-plugin-docs](https://github.
 - the example configurations in `examples/`: `resource.tf`, `data-source.tf` and other `.tf` files are pulled into the pages by the templates, and each resource's `import.sh` becomes its Import section.
 
 Change those sources, run `make docs`, and commit the regenerated `docs/` together with your change. CI runs `make docs-check`, which fails when the committed `docs/` doesn't match. `TestResourceDocsHaveImportExamples` fails if a resource supports import but has no `examples/resources/<name>/import.sh`.
+
+CI also runs `make examples-check` (`scripts/check-examples.sh`), so that no example in the docs is broken:
+
+- It runs `terraform fmt -check` on `examples/`, then `terraform validate` on `examples/`, `examples/provider`, `examples/complete`, each `examples/guides/*` and each `examples/resources/*` and `examples/data-sources/*` directory. `validate` uses the provider built from the checkout through `dev_overrides`, so the current schema and its validators check every attribute. A directory without a `required_providers` block gets one for `blechschmidt/sysutils`. Nothing is planned or applied. With every provider overridden, `validate` needs no `terraform init`, so the check doesn't need network access either.
+- It fails if a template in `templates/` contains a fenced `terraform` or `hcl` block. Put the configuration into a file below `examples/` and include it with `{{ tffile "examples/..." }}`, as the guides do.
+- It fails if a `` ```terraform `` block in this README is not an exact excerpt of a file below `examples/`.
+
+The files that examples read with `file()` or `filebase64()` must exist, since `validate` evaluates those functions. They are small stand-ins, such as `examples/resources/sysutils_ssh_authorized_key/keys/alice.pub`. Files that the provider only reads during plan, such as the `source` of `sysutils_file` and `sysutils_archive_extract`, may be missing.
 
 ## Releasing
 

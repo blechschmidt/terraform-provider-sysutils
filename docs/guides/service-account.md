@@ -1,6 +1,6 @@
 ---
 page_title: "Provisioning a service account and its files"
-subcategory: ""
+subcategory: "Cookbook"
 description: |-
   End-to-end example: a service user and group, a directory tree with the right ownership, a configuration file and a symlink to the active release.
 ---

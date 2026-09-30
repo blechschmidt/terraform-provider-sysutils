@@ -66,4 +66,4 @@ After import, the first plan will populate the computed attributes (`uid`, `gid`
 
 - Requires root privileges. Running as a non-root user will fail at `useradd`.
 - Only manages supplementary groups when `groups` is set. If `groups` is null, the provider will not compare or reconcile membership — it will leave whatever is in `/etc/group` alone to avoid fighting other systems that manage group membership.
-- Does not manage passwords, SSH keys, sudoers entries, or home-directory contents. Pair with `sysutils_file` if you need an `authorized_keys` file, for example.
+- Does not manage passwords, SSH keys, sudoers entries, or home-directory contents. Use [`sysutils_ssh_authorized_key`](./ssh_authorized_key.md) for SSH keys and [`sysutils_file`](./file.md) for a sudoers drop-in; the [bootstrapping guide](../guides/bootstrap-host.md) shows both.

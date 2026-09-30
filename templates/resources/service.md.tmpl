@@ -18,18 +18,7 @@ description: |-
 
 To manage a unit file and its runtime state separately, reference the unit's name so that the unit is created first. Leave `enabled` and `state` unset on the `sysutils_systemd_unit` in that case, so that the two resources don't both manage them:
 
-```terraform
-resource "sysutils_systemd_unit" "app" {
-  name   = "app.service"
-  source = "${path.module}/app.service"
-}
-
-resource "sysutils_service" "app" {
-  name    = sysutils_systemd_unit.app.name
-  enabled = true
-  state   = "running"
-}
-```
+{{ tffile "examples/resources/sysutils_service/with-systemd-unit.tf" }}
 
 {{ .SchemaMarkdown | trimspace }}
 

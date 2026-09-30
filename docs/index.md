@@ -45,7 +45,17 @@ The `sysutils` provider exposes a small set of primitives for host-level adminis
 
 It is intended for small bootstrapping tasks where installing and configuring something like Ansible or a full configuration-management system would be overkill.
 
-For a complete example that combines a service user, group, directory tree, configuration file and symlink, see the [service account guide](./guides/service-account.md).
+## Cookbook
+
+The guides show how the resources work together on common jobs, and explain the choices behind each configuration. Every configuration in them is a file below [`examples/guides`](https://github.com/blechschmidt/terraform-provider-sysutils/tree/main/examples/guides), which CI validates against the provider.
+
+| Guide | Resources |
+|-------|-----------|
+| [Bootstrapping a host](./guides/bootstrap-host.md): base packages and services, administrator accounts, SSH keys and sudo | `sysutils_package`, `sysutils_service`, `sysutils_group`, `sysutils_user`, `sysutils_ssh_authorized_key`, `sysutils_file` |
+| [Hardening a host](./guides/hardening.md): kernel parameters, disabled modules, SSH settings, file modes and a permission audit | `sysutils_sysctl`, `sysutils_kernel_module`, `sysutils_file`, `sysutils_directory`, `sysutils_service` |
+| [Deploying an application](./guides/app-deployment.md): versioned releases, a templated configuration, a systemd unit and restarts on change | `sysutils_archive_extract`, `sysutils_symlink`, `sysutils_template_file`, `sysutils_systemd_unit`, `sysutils_service` |
+| [Image trees, dry runs and parallel applies](./guides/root-dir-plans-and-locking.md): `root_dir`, plans as check mode and drift report, and locking | provider `root_dir`, `sysutils_hosts_entry`, `sysutils_package` |
+| [Provisioning a service account and its files](./guides/service-account.md): ownership and modes of a service's directories, and importing an existing installation | `sysutils_group`, `sysutils_user`, `sysutils_directory`, `sysutils_file`, `sysutils_symlink` |
 
 ## Example Usage
 

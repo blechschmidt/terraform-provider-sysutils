@@ -1,0 +1,63 @@
+---
+page_title: "Cookbook: Hardening a host"
+subcategory: "Cookbook"
+description: |-
+  Apply a hardening baseline: kernel parameters, disabled kernel modules, SSH settings, private directories and an audit of system directory permissions.
+---
+
+# Cookbook: Hardening a host
+
+Hardening baselines such as the CIS benchmarks are mostly long lists of small settings: a kernel parameter here, a disabled module there, a file that must not be readable by others. Each one is easy to set by hand and just as easy to lose, for example to a package upgrade, a colleague debugging something, or a new image. Managed with Terraform, every setting has a resource, and `terraform plan` reports any that no longer holds.
+
+This recipe uses [`sysutils_sysctl`](../resources/sysctl.md), [`sysutils_kernel_module`](../resources/kernel_module.md), [`sysutils_file`](../resources/file.md), [`sysutils_service`](../resources/service.md), [`sysutils_directory`](../resources/directory.md) and the [`sysutils_directory` data source](../data-sources/directory.md). Apply it as root. The complete configuration is in [`examples/guides/hardening`](https://github.com/blechschmidt/terraform-provider-sysutils/tree/main/examples/guides/hardening).
+
+~> **Test on a machine you can reach another way first.** The SSH settings below disable password and root logins. Before you apply them to a remote host, make sure you can log in with a key as a user with sudo rights (see [Bootstrapping a host](./bootstrap-host.md)). Otherwise, keep a console open.
+
+{{ tffile "examples/guides/hardening/versions.tf" }}
+
+## Kernel parameters
+
+{{ tffile "examples/guides/hardening/sysctl.tf" }}
+
+Each `sysutils_sysctl` writes the value to `/proc/sys` right away and adds a `name = value` line to `file`, so that it also holds after a reboot. Parameters from one baseline belong in one file of their own. You can then see what the baseline changed by reading one file, and a `99-` file from a package or an administrator can still override it. The resources share the file, and the provider [locks it](../index.md#concurrency-and-locking) for every edit, so Terraform can apply all eleven in parallel without losing a line.
+
+A plan reports a parameter changed at runtime (`sysctl -w`) or a line edited in the file, and apply restores both. Destroying a resource removes its line, but it doesn't reset the running kernel's value. That happens at the next reboot.
+
+Check each parameter against what the host does before you apply it. For example, `rp_filter = 1` drops packets that arrive on an interface other than the one the reply would leave by. That breaks hosts with asymmetric routing, where `2` (loose mode) is the right value.
+
+## Kernel modules
+
+{{ tffile "examples/guides/hardening/kernel_modules.tf" }}
+
+`sysutils_kernel_module` *loads* modules, and cannot keep one from being loaded. A module you never want is therefore disabled with a `modprobe.d` file. Its `install ... /bin/false` lines make `modprobe` fail for it, even when the kernel requests the module on demand, such as when a program opens an SCTP socket. An already loaded module stays loaded until the next reboot or `modprobe -r`.
+
+`br_netfilter` shows the opposite case: a module the hardening depends on. Without it, traffic between containers or VMs on a Linux bridge bypasses iptables and nftables completely. The module resource loads it now and lists it in `/etc/modules-load.d/br_netfilter.conf` for the next boot. The two `net.bridge.*` parameters only exist while the module is loaded, so they depend on it. At boot, systemd loads the modules before it applies `sysctl.d`, so the order holds there, too.
+
+## SSH, private directories and file modes
+
+{{ tffile "examples/guides/hardening/file_modes.tf" }}
+
+**Modes are part of the resource.** `sysutils_file` and `sysutils_directory` apply `owner`, `group` and `mode` when they create the file, check them on every refresh, and restore them on the next apply if someone changed them. Ownership is set before the mode, and both before any content is written. A secret is therefore never visible, even briefly, under a looser mode. See the [security model](../index.md#security-model).
+
+**Restart on change.** `restart_on_change` restarts `sshd` whenever the drop-in file's checksum changes, so the new settings take effect in the same apply. Established SSH sessions survive a restart of `sshd`. If you also use the [bootstrapping recipe](./bootstrap-host.md), manage the SSH service with only one `sysutils_service` resource: merge `restart_on_change` into the one that sets `enabled`, rather than having two resources for the same service.
+
+**Recursive modes for directories others write to.** `/var/backups/host` is written by backup jobs, which may create files with any mode. With `recursive_mode` and `recursive_owner`, every apply resets all entries below it to `root:root`, `0700` for directories and `0600` for files. A plan shows how many entries don't match in `nonconforming_entries`. Symlinks inside the tree are never followed.
+
+**Audit what you don't own.** Directories such as `/etc` and `/root` belong to the operating system, not to this configuration. A resource would take them over: `terraform destroy` would try to remove them. The data source only reads their mode and owner. The [`check` block](https://developer.hashicorp.com/terraform/language/checks) turns a directory that users other than root can write to into a warning in every `terraform plan` and `apply`, without failing the run:
+
+```text
+Warning: Check block assertion failed
+
+  on file_modes.tf line 73, in check "root_only_writable":
+  73:     condition     = length(local.writable_by_others) == 0
+    ├────────────────
+    │ local.writable_by_others is tuple with 1 element
+
+Directories writable by users other than root: /etc/cron.d (root:root 0777).
+```
+
+Checks need Terraform 1.5 or later, or OpenTofu. The data source also stores the directories' entry names in the state, so keep it to directories with few entries.
+
+## Firewall
+
+A baseline usually also restricts inbound connections. [`sysutils_firewall_rule`](../resources/firewall_rule.md) adds one nftables or iptables rule per resource, in a table of its own, and never touches rules that other tools manage. Its page has examples for allowing SSH from one network only.

@@ -38,6 +38,8 @@ jobs:
           terraform_wrapper: false
       - name: Check generated docs are up to date
         run: make docs-check
+      - name: Check examples are formatted and valid
+        run: make examples-check
 
   # Full suite, including acceptance tests, as root in a disposable container
   # (make testacc-docker), so that the user, group, chown and file_line tests
