@@ -36,7 +36,7 @@ import (
 
 // defaultUpgradeFromVersion is the release the upgrade tests start from.
 // SYSUTILS_UPGRADE_FROM_VERSION overrides it. Bump it after every release.
-const defaultUpgradeFromVersion = "1.1.0"
+const defaultUpgradeFromVersion = "1.2.0"
 
 const (
 	upgradeProviderHost      = "registry.terraform.io"
