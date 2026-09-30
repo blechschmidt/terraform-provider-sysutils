@@ -4,6 +4,14 @@ All notable changes to this provider are listed here. Versions follow [semantic 
 
 ## Unreleased
 
+## 1.4.0 (2026-09-30)
+
+Ephemeral resources, actions, and resources for logrotate and journald drop-ins. The resources, data sources and functions of v1.3.0 are unchanged.
+
+### Upgrading from v1.3.0
+
+State written by v1.3.0 keeps working: no schema of an existing resource changed, and after upgrading, the first `terraform plan` of an unchanged configuration is empty. The [upgrade tests](./README.md#upgrade-tests) check this for every resource. The ephemeral resources need Terraform 1.10 or OpenTofu 1.11, and the actions Terraform 1.14; with older CLIs, the rest of the provider works as before.
+
 ### New features
 
 - Ephemeral resources, for Terraform 1.10 and later and OpenTofu 1.11 and later. Neither their configuration nor their results are stored in the plan or the state, so they can feed secrets to write-only arguments such as `content_wo` of `sysutils_file`.
@@ -15,6 +23,13 @@ All notable changes to this provider are listed here. Versions follow [semantic 
 - New resource [`sysutils_logrotate`](./docs/resources/logrotate.md) manages a logrotate drop-in in `/etc/logrotate.d` with one block of log paths: `frequency`, `rotate`, `compress`, `delaycompress`, `missingok`, `notifempty`, `sharedscripts`, `create_mode`, `create_owner` and `create_group`, a `postrotate` script and `extra_directives` for anything else. The file is checked with `logrotate -d` before it is renamed into place when logrotate is installed, with errors about missing log files ignored. Names that logrotate would skip, and paths, directives and scripts that could end the block or script early, are refused at plan time. It honours the provider's `root_dir`, and single-block files can be imported by name.
 - New resource [`sysutils_journald_config`](./docs/resources/journald_config.md) manages a systemd-journald drop-in, `/etc/systemd/journald.conf.d/<name>.conf`, with `storage`, `system_max_use`, `max_retention_sec`, `compress` and `forward_to_syslog`, and other `[Journal]` settings in `extra`. With `restart = true`, it restarts `systemd-journald.service` when the file changes, retrying a failed restart on the next apply. It honours the provider's `root_dir` (without `restart`), and drop-ins can be imported by name.
 - The "Hardening a host" guide has a new section on persistent, bounded journald storage and on rotating the sudo log.
+
+### Security
+
+These fix issues found in the security review of the features above, before their first release, so no released version is affected.
+
+- `sysutils_logrotate` refused a `postrotate` line only if it was exactly `endscript`, but logrotate ends a script at any line whose first word starts with `endscript` and parses the rest of that line as directives. A script line such as `endscript } /var/log/other {` could therefore close the block and open another one with arbitrary directives, including scripts that logrotate runs as root. Any script line starting with `endscript` is now refused, and import refuses a file with such a line.
+- `sysutils_logrotate` checked only the first word of each `extra_directives` entry, but logrotate parses the rest of a line after a directive without arguments as further directives. `"missingok postrotate"` started a script that took in the following lines, and `"notifempty include /etc/x"` included another file inside the block; `logrotate -d` accepts both. No word of a directive may now be `include` or a script keyword such as `postrotate`, `prerotate`, `firstaction`, `lastaction`, `preremove` or `endscript`.
 
 ## 1.3.0 (2026-09-30)
 
