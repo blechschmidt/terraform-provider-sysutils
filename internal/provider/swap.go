@@ -475,89 +475,11 @@ func allocateSwapFile(ctx context.Context, m swapManager, p string, size int64, 
 // resolves to. mkswap(8) and swapon(8) take a path and follow symlinks, so
 // if another user could replace the file, the directory or any directory
 // above it (or a symlink on the way) with a symlink, mkswap could be made to
-// overwrite any file or device, and swapon to swap to it. Every directory
-// that resolving dir passes through, including the targets of symlinks,
-// must therefore belong to root or the provider's user and not be writable
-// by others, unless it is sticky like /tmp; in a sticky directory the next
-// entry must belong to root or the provider's user as well.
+// overwrite any file or device, and swapon to swap to it. See
+// checkTrustedDir.
 func checkSwapFileDir(dir string) error {
-	euid := uint32(os.Geteuid()) //nolint:gosec // UIDs fit in 32 bits.
-	trusted := func(st *syscall.Stat_t) bool { return st.Uid == 0 || st.Uid == euid }
-	// check checks the directory at p and reports whether it is sticky and
-	// writable by others.
-	check := func(p string) (bool, error) {
-		info, err := os.Stat(p)
-		if err != nil {
-			return false, fmt.Errorf("directory for swap file: %w", err)
-		}
-		if !info.IsDir() {
-			return false, fmt.Errorf("%q is not a directory", p)
-		}
-		st, ok := info.Sys().(*syscall.Stat_t)
-		if !ok {
-			return false, nil
-		}
-		if !trusted(st) {
-			return false, fmt.Errorf("directory %q belongs to user %d; swap files must be in a directory owned by root", p, st.Uid)
-		}
-		open := info.Mode()&0o022 != 0
-		if open && info.Mode()&fs.ModeSticky == 0 {
-			return false, fmt.Errorf("directory %q is writable by other users; swap files must be in a directory only root can write to", p)
-		}
-		return open, nil
-	}
-
-	pending := strings.Split(filepath.Clean(dir), "/")
-	cur := "/"
-	sticky, err := check(cur)
-	if err != nil {
-		return err
-	}
-	for links := 0; len(pending) > 0; {
-		name := pending[0]
-		pending = pending[1:]
-		switch name {
-		case "", ".":
-			continue
-		case "..":
-			// cur has no symlinks, so its parent is the lexical one.
-			cur = filepath.Dir(cur)
-			if sticky, err = check(cur); err != nil {
-				return err
-			}
-			continue
-		}
-		next := filepath.Join(cur, name)
-		info, err := os.Lstat(next)
-		if err != nil {
-			return fmt.Errorf("directory for swap file: %w", err)
-		}
-		if st, ok := info.Sys().(*syscall.Stat_t); ok && sticky && !trusted(st) {
-			return fmt.Errorf("%q belongs to user %d, who can replace it in the sticky directory %q", next, st.Uid, cur)
-		}
-		if info.Mode()&fs.ModeSymlink != 0 {
-			if links++; links > 40 {
-				return fmt.Errorf("directory for swap file %q: too many levels of symbolic links", dir)
-			}
-			target, err := os.Readlink(next)
-			if err != nil {
-				return fmt.Errorf("directory for swap file: %w", err)
-			}
-			if filepath.IsAbs(target) {
-				cur = "/"
-				if sticky, err = check(cur); err != nil {
-					return err
-				}
-			}
-			pending = append(strings.Split(target, "/"), pending...)
-			continue
-		}
-		if sticky, err = check(next); err != nil {
-			return err
-		}
-		cur = next
-	}
-	return nil
+	_, err := checkTrustedDir(dir, "swap file")
+	return err
 }
 
 // fillSwapFile allocates size bytes for f with fallocate(2), or writes size

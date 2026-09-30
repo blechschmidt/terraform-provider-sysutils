@@ -43,13 +43,13 @@ output "editor_mode" {
 ### Required
 
 - `name` (String) Name of the link group, such as `"editor"` or `"java"`. ASCII letters, digits, `_`, `.`, `+`, `@`, `:`, `~` and `-`, starting with a letter, digit or `_`. Changing this forces a new resource.
-- `path` (String) The alternative to select, such as `"/usr/bin/vim.basic"`: an absolute, canonical path without white space. It must be registered in the link group already, unless `link` and `priority` are set to register it.
+- `path` (String) The alternative to select, such as `"/usr/bin/vim.basic"`: an absolute, canonical path without white space. It must be registered in the link group already, unless `link` and `priority` are set to register it. Because root runs it, it must belong to root (or the provider's user) and not be writable by others, and so must every directory and symlink on the way to it; otherwise nothing is changed and apply fails.
 
 ### Optional
 
-- `link` (String) The link group's master link, such as `"/usr/bin/editor"`. With `priority`, `path` is registered with `--install <link> <name> <path> <priority>` whenever it is not registered, or the group's link or the alternative's priority differ; these then count as drift. An existing group's link is renamed to it. Requires `priority`.
+- `link` (String) The link group's master link, such as `"/usr/bin/editor"`. With `priority`, `path` is registered with `--install <link> <name> <path> <priority>` whenever it is not registered, or the group's link or the alternative's priority differ; these then count as drift. An existing group's link is renamed to it. Its directory, and every directory above it, must belong to root (or the provider's user) and not be writable by others, since the tool follows symlinks there. Requires `priority`.
 - `priority` (Number) Priority `path` is registered with, used to pick an alternative in automatic mode; the highest wins. A 32-bit signed integer. Requires `link`.
-- `remove_on_destroy` (Boolean) What happens on destroy. If `false`, the link group returns to automatic mode (`--auto`), and `path` stays registered. If `true`, `path` is unregistered (`--remove`), which selects the best remaining alternative, or removes the link group and its links if it was the last one. Use `true` for alternatives registered through `link` and `priority`. Defaults to `false`.
+- `remove_on_destroy` (Boolean) What happens on destroy. If `false`, the link group returns to automatic mode (`--auto`), and `path` stays registered. If `true`, the alternative this resource last selected is unregistered (`--remove`), which selects the best remaining alternative, or removes the link group and its links if it was the last one. An alternative selected outside Terraform since, which refresh reports as `path`, is never unregistered. Use `true` for alternatives registered through `link` and `priority`. Defaults to `false`.
 
 ### Read-Only
 

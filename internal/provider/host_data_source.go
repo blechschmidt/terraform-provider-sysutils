@@ -96,7 +96,8 @@ func (d *hostDataSource) Schema(_ context.Context, _ datasource.SchemaRequest, r
 			"memory_total_bytes": schema.Int64Attribute{
 				Computed: true,
 				MarkdownDescription: "Total usable RAM in bytes, `MemTotal` of `/proc/meminfo`. " +
-					"In a container this is usually the host's memory, not the container's limit." + liveNote,
+					"In a container this is usually the host's memory, not the container's limit. " +
+					"Null, with a warning, if `/proc/meminfo` cannot be read, as in containers without procfs." + liveNote,
 			},
 			"init_system": str("Init system that booted the host: `systemd` if `/run/systemd/system` exists, otherwise `openrc` if `/run/openrc/softlevel` exists, otherwise `sysvinit` if PID 1 is called `init` (SysV or BusyBox init). " +
 				"Null if none of these is the case, as in most containers. " +
@@ -137,7 +138,7 @@ func (d *hostDataSource) Read(ctx context.Context, _ datasource.ReadRequest, res
 		return
 	}
 	for _, w := range warnings {
-		resp.Diagnostics.AddWarning("No os-release file", w)
+		resp.Diagnostics.AddWarning(w.summary, w.detail)
 	}
 
 	state, diags := hostFactsModel(ctx, src.root, facts)
@@ -172,10 +173,13 @@ func hostFactsModel(ctx context.Context, root *fsRoot, f hostFacts) (hostDataSou
 		KernelRelease:     optional(f.kernel.release),
 		Architecture:      optional(f.kernel.machine),
 		CPUCount:          types.Int64Value(int64(f.cpuCount)),
-		MemoryTotalBytes:  types.Int64Value(f.memTotal),
+		MemoryTotalBytes:  types.Int64Null(),
 		InitSystem:        optional(f.initSystem),
 		PackageManager:    optional(f.packageManager),
 		FirewallBackend:   optional(f.firewallBackend),
+	}
+	if f.memTotal >= 0 {
+		m.MemoryTotalBytes = types.Int64Value(f.memTotal)
 	}
 	var d diag.Diagnostics
 	m.LiveFacts, d = types.ListValueFrom(ctx, types.StringType, liveHostFacts)

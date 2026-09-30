@@ -22,6 +22,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 	"unicode"
 
@@ -153,6 +154,83 @@ type alternativesConfig struct {
 	lookPath func(string) (string, error)
 	// rhelAdminDir replaces /var/lib/alternatives.
 	rhelAdminDir string
+	// checkPaths replaces checkAlternativesPaths.
+	checkPaths func(link, path string) error
+}
+
+// checkPathsFn returns the check applied to link and path before the tool
+// is asked to change a link group.
+func (c *alternativesConfig) checkPathsFn() func(link, path string) error {
+	if c == nil || c.checkPaths == nil {
+		return checkAlternativesPaths
+	}
+	return c.checkPaths
+}
+
+// checkAlternativesPaths checks that nobody but root or the provider's user
+// can change what link and path resolve to. Both tools run as root and
+// follow symlinks in the directories above the master link when they
+// create, rename or delete it, so another user who could swap one of those
+// directories for a symlink could have a link created or a file deleted
+// anywhere on the host. And whoever can replace the selected alternative, or
+// a directory or symlink on the way to it, chooses the program that root
+// runs as, say, /usr/bin/editor. link is "" if the link group is not
+// (re)registered. See checkTrustedDir.
+func checkAlternativesPaths(link, p string) error {
+	if link != "" {
+		// A missing directory can only be created by those who can write
+		// to the directory above it, which the walk found trustworthy; the
+		// tool then fails with its own message.
+		open, err := checkTrustedDir(filepath.Dir(link), "alternatives link")
+		if err != nil && !errors.Is(err, fs.ErrNotExist) {
+			return fmt.Errorf("link %q: %w", link, err)
+		}
+		if open {
+			return fmt.Errorf("link %q: directory %q is writable by other users, who could replace the link; alternatives links must be in a directory only root can write to", link, filepath.Dir(link))
+		}
+	}
+	euid := uint32(os.Geteuid()) //nolint:gosec // UIDs fit in 32 bits.
+	cur := p
+	for hops := 0; ; hops++ {
+		if hops > 40 {
+			return fmt.Errorf("path %q: too many levels of symbolic links", p)
+		}
+		if _, err := checkTrustedDir(filepath.Dir(cur), "alternative"); errors.Is(err, fs.ErrNotExist) {
+			return nil
+		} else if err != nil {
+			return fmt.Errorf("path %q: %w", p, err)
+		}
+		info, err := os.Lstat(cur)
+		if errors.Is(err, fs.ErrNotExist) {
+			// The tool refuses a missing alternative with its own message.
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("path %q: %w", p, err)
+		}
+		if info.Mode()&fs.ModeSymlink != 0 {
+			target, err := os.Readlink(cur)
+			if err != nil {
+				return fmt.Errorf("path %q: %w", p, err)
+			}
+			if !filepath.IsAbs(target) {
+				target = filepath.Join(filepath.Dir(cur), target)
+			}
+			cur = filepath.Clean(target)
+			continue
+		}
+		st, ok := info.Sys().(*syscall.Stat_t)
+		if !ok {
+			return nil
+		}
+		if st.Uid != 0 && st.Uid != euid {
+			return fmt.Errorf("path %q: %q belongs to user %d, who could replace the program it runs; alternatives must belong to root", p, cur, st.Uid)
+		}
+		if info.Mode().Perm()&0o022 != 0 {
+			return fmt.Errorf("path %q: %q is writable by other users, who could replace the program it runs", p, cur)
+		}
+		return nil
+	}
 }
 
 func (c *alternativesConfig) runner() commandRunner {

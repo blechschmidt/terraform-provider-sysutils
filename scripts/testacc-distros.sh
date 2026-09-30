@@ -109,9 +109,13 @@ for image in "${images[@]}"; do
 	# host's mounts and firewall are not affected. --init: the test binary
 	# must not be PID 1, which would leave the daemons that OpenRC's
 	# start-stop-daemon orphans unreaped, so that stopping them never
-	# completes ("process refused to stop").
+	# completes ("process refused to stop"). Everything runs as root, so
+	# no-new-privileges costs nothing and keeps setuid programs in the image
+	# from gaining more. No credentials, sockets or host paths other than
+	# the read-only bundle are passed in.
 	docker run --rm --init --pull missing \
 		--cap-add SYS_ADMIN --cap-add NET_ADMIN --security-opt apparmor=unconfined \
+		--security-opt no-new-privileges \
 		-e TF_CLI="$TF_CLI" -e ACC_TIMEOUT -e SYSUTILS_ACC_PACKAGE \
 		-v "$out:/sysutils:ro" \
 		"$image" /bin/sh /sysutils/entrypoint.sh "${run_args[@]}" \

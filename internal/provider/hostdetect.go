@@ -123,7 +123,9 @@ func lookPathIn(root *fsRoot) func(string) (string, error) {
 			if err != nil {
 				continue
 			}
-			if fi, err := os.Stat(host); err == nil && fi.Mode().IsRegular() && fi.Mode().Perm()&0o111 != 0 {
+			// resolveFollow resolved every symlink, so a symlink here was
+			// planted since; do not follow it out of the tree.
+			if fi, err := os.Lstat(host); err == nil && fi.Mode().IsRegular() && fi.Mode().Perm()&0o111 != 0 {
 				return p, nil
 			}
 		}

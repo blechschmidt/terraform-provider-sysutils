@@ -82,7 +82,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
+      # No job below pushes, and the test containers must never see a token.
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5 # v6.2.0
         with:
           go-version-file: 'go.mod'
@@ -106,6 +109,8 @@ jobs:
         image: ['debian:stable', 'alpine:latest', 'fedora:latest']
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5 # v6.2.0
         with:
           go-version-file: 'go.mod'
@@ -114,8 +119,12 @@ jobs:
         with:
           name: testacc-bundle
           path: testacc-bundle
+      # The image reaches the shell through the environment, never through
+      # expression interpolation into the script.
       - name: Acceptance tests in ${{ matrix.image }} (root in Docker)
-        run: scripts/testacc-distros.sh --bundle testacc-bundle '${{ matrix.image }}'
+        run: scripts/testacc-distros.sh --bundle testacc-bundle "$IMAGE"
+        env:
+          IMAGE: ${{ matrix.image }}
 
   # examples/complete end to end with the provider built from this commit:
   # init, plan, apply, a second plan that must be empty, and destroy (see

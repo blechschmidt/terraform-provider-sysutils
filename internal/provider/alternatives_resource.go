@@ -2,6 +2,7 @@ package provider
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math"
 
@@ -68,13 +69,15 @@ func (r *alternativesResource) Schema(_ context.Context, _ resource.SchemaReques
 			"path": schema.StringAttribute{
 				Required: true,
 				MarkdownDescription: "The alternative to select, such as `\"/usr/bin/vim.basic\"`: an absolute, canonical path without white space. " +
-					"It must be registered in the link group already, unless `link` and `priority` are set to register it.",
+					"It must be registered in the link group already, unless `link` and `priority` are set to register it. " +
+					"Because root runs it, it must belong to root (or the provider's user) and not be writable by others, and so must every directory and symlink on the way to it; otherwise nothing is changed and apply fails.",
 				Validators: []validator.String{stringCheck("path", validateAlternativesPath)},
 			},
 			"link": schema.StringAttribute{
 				Optional: true,
 				MarkdownDescription: "The link group's master link, such as `\"/usr/bin/editor\"`. With `priority`, `path` is registered with `--install <link> <name> <path> <priority>` whenever it is not registered, " +
-					"or the group's link or the alternative's priority differ; these then count as drift. An existing group's link is renamed to it. Requires `priority`.",
+					"or the group's link or the alternative's priority differ; these then count as drift. An existing group's link is renamed to it. " +
+					"Its directory, and every directory above it, must belong to root (or the provider's user) and not be writable by others, since the tool follows symlinks there. Requires `priority`.",
 				Validators: []validator.String{stringCheck("link", validateAlternativesPath)},
 			},
 			"priority": schema.Int64Attribute{
@@ -94,7 +97,8 @@ func (r *alternativesResource) Schema(_ context.Context, _ resource.SchemaReques
 				Computed: true,
 				Default:  booldefault.StaticBool(false),
 				MarkdownDescription: "What happens on destroy. If `false`, the link group returns to automatic mode (`--auto`), and `path` stays registered. " +
-					"If `true`, `path` is unregistered (`--remove`), which selects the best remaining alternative, or removes the link group and its links if it was the last one. " +
+					"If `true`, the alternative this resource last selected is unregistered (`--remove`), which selects the best remaining alternative, or removes the link group and its links if it was the last one. " +
+					"An alternative selected outside Terraform since, which refresh reports as `path`, is never unregistered. " +
 					"Use `true` for alternatives registered through `link` and `priority`. Defaults to `false`.",
 			},
 			"id": schema.StringAttribute{
@@ -193,6 +197,7 @@ func (r *alternativesResource) Create(ctx context.Context, req resource.CreateRe
 	// After a partial apply, record the resource so that it is tainted and
 	// destroy can clean up.
 	if !resp.Diagnostics.HasError() || changed {
+		resp.Diagnostics.Append(writeAppliedAlternative(ctx, resp.Private, plan.Path.ValueString())...)
 		resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 	}
 }
@@ -209,6 +214,13 @@ func (r *alternativesResource) Read(ctx context.Context, req resource.ReadReques
 		return
 	}
 	defer unlock()
+	// State written by versions without private state: until the next
+	// apply, the path in state stands for the applied alternative, as long
+	// as refresh has not replaced it.
+	if _, found, diags := readAppliedAlternative(ctx, req.Private); !diags.HasError() && !found &&
+		!state.Mode.IsNull() && state.Path.ValueString() != "" {
+		resp.Diagnostics.Append(writeAppliedAlternative(ctx, resp.Private, state.Path.ValueString())...)
+	}
 	gone, diags := r.refresh(ctx, tool, &state)
 	resp.Diagnostics.Append(diags...)
 	if resp.Diagnostics.HasError() {
@@ -239,6 +251,7 @@ func (r *alternativesResource) Update(ctx context.Context, req resource.UpdateRe
 	if resp.Diagnostics.HasError() {
 		return
 	}
+	resp.Diagnostics.Append(writeAppliedAlternative(ctx, resp.Private, plan.Path.ValueString())...)
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)
 }
 
@@ -256,9 +269,19 @@ func (r *alternativesResource) Delete(ctx context.Context, req resource.DeleteRe
 		return
 	}
 	remove := state.RemoveOnDestroy.ValueBool()
+	// Refresh replaces path with whatever the link group points to now,
+	// which may be an alternative that someone else selected. Only the one
+	// this resource applied is ever unregistered.
+	applied, found, diags := readAppliedAlternative(ctx, req.Private)
+	resp.Diagnostics.Append(diags...)
+	if resp.Diagnostics.HasError() {
+		return
+	}
+	if found {
+		p = applied
+	}
 	if remove && p == "" {
-		// Refresh found no registered alternative selected, so there is
-		// nothing of this resource's to unregister.
+		// Nothing of this resource's to unregister.
 		return
 	}
 	if remove {
@@ -337,9 +360,14 @@ func (r *alternativesResource) apply(ctx context.Context, tool *alternativesTool
 		return false, diags
 	}
 	entry, registered := st.entry(p)
+	checkPaths := r.cfg.checkPathsFn()
 	if install {
 		link, priority := plan.Link.ValueString(), plan.Priority.ValueInt64()
 		if !registered || st.Link != link || entry.Priority != priority {
+			if err := checkPaths(link, p); err != nil {
+				diags.AddAttributeError(path.Root("path"), "Untrusted path", capitalize(err.Error())+".")
+				return false, diags
+			}
 			changed = true
 			if err := tool.Install(ctx, link, name, p, priority); err != nil {
 				diags.AddAttributeError(path.Root("path"), "Registering alternative", capitalize(err.Error())+".")
@@ -368,6 +396,10 @@ func (r *alternativesResource) apply(ctx context.Context, tool *alternativesTool
 	}
 
 	if st.Mode != alternativesModeManual || st.Value != p {
+		if err := checkPaths("", p); err != nil {
+			diags.AddAttributeError(path.Root("path"), "Untrusted path", capitalize(err.Error())+".")
+			return changed, diags
+		}
 		changed = true
 		if err := tool.Set(ctx, name, p); err != nil {
 			diags.AddAttributeError(path.Root("path"), "Selecting alternative", capitalize(err.Error())+".")
@@ -446,4 +478,45 @@ func alternativesPaths(st alternativesStatus) string {
 		s += e.Path
 	}
 	return s
+}
+
+// privateAppliedAlternative is the key in the resource's private state of
+// the alternative the resource last selected, as a JSON string. It is not
+// the path attribute, which refresh replaces with the current selection to
+// show drift.
+const privateAppliedAlternative = "applied_path"
+
+// readAppliedAlternative returns the path stored under
+// privateAppliedAlternative; found is false if none is.
+func readAppliedAlternative(ctx context.Context, p interface {
+	GetKey(context.Context, string) ([]byte, diag.Diagnostics)
+}) (applied string, found bool, diags diag.Diagnostics) {
+	data, diags := p.GetKey(ctx, privateAppliedAlternative)
+	if diags.HasError() || len(data) == 0 {
+		return "", false, diags
+	}
+	if err := json.Unmarshal(data, &applied); err != nil {
+		diags.AddError("Invalid private state", fmt.Sprintf("Unable to decode %s: %s.", privateAppliedAlternative, err))
+		return "", false, diags
+	}
+	if applied != "" {
+		if err := validateAlternativesPath(applied); err != nil {
+			diags.AddError("Invalid private state", capitalize(err.Error())+".")
+			return "", false, diags
+		}
+	}
+	return applied, true, diags
+}
+
+// writeAppliedAlternative stores p under privateAppliedAlternative.
+func writeAppliedAlternative(ctx context.Context, priv interface {
+	SetKey(context.Context, string, []byte) diag.Diagnostics
+}, p string) diag.Diagnostics {
+	data, err := json.Marshal(p)
+	if err != nil {
+		var diags diag.Diagnostics
+		diags.AddError("Encoding private state", err.Error())
+		return diags
+	}
+	return priv.SetKey(ctx, privateAppliedAlternative, data)
 }

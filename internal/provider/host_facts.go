@@ -163,6 +163,10 @@ func (r osRelease) versionCodename() string {
 	return r["UBUNTU_CODENAME"]
 }
 
+// testHookOSReleaseResolved, if set, runs after an os-release path below
+// root_dir was resolved and before it is opened.
+var testHookOSReleaseResolved func(host string)
+
 // readOSRelease reads the first os-release file that exists below root,
 // following symlinks inside it (/etc/os-release usually is one). It
 // returns the path read, and an error wrapping fs.ErrNotExist if there is
@@ -176,7 +180,14 @@ func readOSRelease(root *fsRoot) (osRelease, string, error) {
 			}
 			return nil, p, err
 		}
-		data, err := readBounded(host, maxOSReleaseSize)
+		read := readBounded
+		if !root.isHost() {
+			if testHookOSReleaseResolved != nil {
+				testHookOSReleaseResolved(host)
+			}
+			read = readBoundedNoSymlinks
+		}
+		data, err := read(host, maxOSReleaseSize)
 		if errors.Is(err, fs.ErrNotExist) {
 			continue
 		}
@@ -189,12 +200,57 @@ func readOSRelease(root *fsRoot) (osRelease, string, error) {
 }
 
 // readBounded reads the regular file at p, failing if it is larger than
-// limit.
+// limit. O_NONBLOCK keeps a FIFO at p from blocking the provider forever.
 func readBounded(p string, limit int64) ([]byte, error) {
-	f, err := os.Open(p)
+	f, err := os.OpenFile(p, os.O_RDONLY|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
 	if err != nil {
 		return nil, err
 	}
+	return readBoundedFile(f, p, limit)
+}
+
+// readBoundedNoSymlinks is readBounded for a path that contains no
+// symlinks, as resolved below root_dir. It opens the path component by
+// component without following symlinks, so that whoever can write to the
+// tree cannot swap a directory on the way for a symlink out of it between
+// resolving and opening the path, and checks that the file is regular
+// before opening it, so that no device node is ever opened.
+func readBoundedNoSymlinks(p string, limit int64) ([]byte, error) {
+	dirfd, err := openDirPathNoSymlinks(filepath.Dir(p))
+	if err != nil {
+		if errors.Is(err, errNotRecursivelyRemovable) {
+			return nil, fmt.Errorf("%s changed while it was being read: a directory on the way was replaced by a symbolic link", p)
+		}
+		return nil, err
+	}
+	defer func() { _ = unix.Close(dirfd) }()
+	base := filepath.Base(p)
+	var before unix.Stat_t
+	if err := unix.Fstatat(dirfd, base, &before, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+		return nil, &fs.PathError{Op: "lstat", Path: p, Err: err}
+	}
+	if before.Mode&unix.S_IFMT != unix.S_IFREG {
+		return nil, fmt.Errorf("%s is not a regular file", p)
+	}
+	fd, err := unix.Openat(dirfd, base, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return nil, &fs.PathError{Op: "open", Path: p, Err: err}
+	}
+	f := os.NewFile(uintptr(fd), p)
+	var after unix.Stat_t
+	if err := unix.Fstat(fd, &after); err != nil {
+		_ = f.Close()
+		return nil, &fs.PathError{Op: "fstat", Path: p, Err: err}
+	}
+	if after.Dev != before.Dev || after.Ino != before.Ino {
+		_ = f.Close()
+		return nil, fmt.Errorf("%s changed while it was being read", p)
+	}
+	return readBoundedFile(f, p, limit)
+}
+
+// readBoundedFile reads f, which was opened from p, and closes it.
+func readBoundedFile(f *os.File, p string, limit int64) ([]byte, error) {
 	defer func() { _ = f.Close() }()
 	fi, err := f.Stat()
 	if err != nil {
@@ -331,11 +387,12 @@ func canonicalNameInHosts(data []byte, name string) string {
 // hostFacts is everything sysutils_host reports. Empty strings and a nil
 // osRelease stand for facts that could not be determined.
 type hostFacts struct {
-	hostname, fqdn  string
-	osRelease       osRelease
-	osReleasePath   string
-	kernel          kernel
-	cpuCount        int
+	hostname, fqdn string
+	osRelease      osRelease
+	osReleasePath  string
+	kernel         kernel
+	cpuCount       int
+	// memTotal is -1 if it could not be read.
 	memTotal        int64
 	initSystem      string
 	packageManager  string
@@ -352,12 +409,18 @@ type hostFactSources struct {
 	firewall *firewallConfig
 }
 
-// collectHostFacts gathers the facts. A missing os-release file, and
+// hostFactWarning is a fact that could not be determined.
+type hostFactWarning struct {
+	summary, detail string
+}
+
+// collectHostFacts gathers the facts. A missing os-release file, an
+// unreadable /proc/meminfo (as in containers without procfs), and
 // undetectable init systems, package managers and firewall backends, are
-// not errors: the facts are left empty and reported as warnings.
-func collectHostFacts(ctx context.Context, src hostFactSources) (hostFacts, []string, error) {
+// not errors: the facts are left empty, the first two with a warning.
+func collectHostFacts(ctx context.Context, src hostFactSources) (hostFacts, []hostFactWarning, error) {
 	var f hostFacts
-	var warnings []string
+	var warnings []hostFactWarning
 
 	k, err := src.host.uname()
 	if err != nil {
@@ -368,13 +431,15 @@ func collectHostFacts(ctx context.Context, src hostFactSources) (hostFacts, []st
 	f.fqdn = src.host.fqdn(ctx, f.hostname)
 	f.cpuCount = runtime.NumCPU()
 	if f.memTotal, err = src.host.memTotal(); err != nil {
-		return f, nil, err
+		f.memTotal = -1
+		warnings = append(warnings, hostFactWarning{"Cannot read memory size",
+			capitalize(err.Error()) + "; memory_total_bytes is null."})
 	}
 
 	f.osRelease, f.osReleasePath, err = readOSRelease(src.root)
 	switch {
 	case errors.Is(err, fs.ErrNotExist):
-		warnings = append(warnings, capitalize(err.Error())+"; the os_* attributes are null.")
+		warnings = append(warnings, hostFactWarning{"No os-release file", capitalize(err.Error()) + "; the os_* attributes are null."})
 	case err != nil:
 		return f, nil, fmt.Errorf("reading %s: %w", f.osReleasePath, err)
 	}
