@@ -22,6 +22,16 @@ jobs:
         run: go build ./...
       - name: Vet
         run: go vet ./...
+      # The release (.goreleaser.yml) also ships linux/arm64, linux/386 and
+      # linux/arm builds. Vet compiles the provider and its tests for each,
+      # so 32-bit overflows and architecture-specific syscall types fail
+      # here rather than at release time.
+      - name: Vet release architectures
+        run: |
+          for arch in arm64 386 arm; do
+            echo "GOARCH=$arch"
+            GOOS=linux GOARCH=$arch go vet ./...
+          done
       - name: Unit tests
         run: go test ./... -count=1
 

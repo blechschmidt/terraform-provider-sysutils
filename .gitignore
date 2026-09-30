@@ -5,3 +5,4 @@ terraform-provider-sysutils
 .terraform.lock.hcl
 .cloop/
 testacc-bundle/
+dist/

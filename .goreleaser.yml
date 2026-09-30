@@ -1,4 +1,16 @@
+# goreleaser configuration for the Terraform Registry. The layout follows
+# https://developer.hashicorp.com/terraform/registry/providers/publishing:
+# one zip per platform named <project>_<version>_<os>_<arch>.zip containing
+# terraform-provider-sysutils_v<version>, a <project>_<version>_SHA256SUMS
+# file with a detached GPG signature (<...>_SHA256SUMS.sig), and the
+# registry manifest as <project>_<version>_manifest.json.
+#
+# The provider only supports Linux, so only Linux builds are produced.
+# Check the configuration with "goreleaser check" and build the artifacts
+# locally with "goreleaser release --snapshot --clean" (see README.md,
+# "Releasing").
 version: 2
+project_name: terraform-provider-sysutils
 builds:
   - env:
       - CGO_ENABLED=0
@@ -12,6 +24,10 @@ builds:
     goarch:
       - amd64
       - arm64
+      - "386"
+      - arm
+    goarm:
+      - "6"
     binary: "{{ .ProjectName }}_v{{ .Version }}"
 archives:
   - formats:
@@ -37,6 +53,8 @@ release:
   extra_files:
     - glob: 'terraform-registry-manifest.json'
       name_template: '{{ .ProjectName }}_{{ .Version }}_manifest.json'
+snapshot:
+  version_template: "{{ incpatch .Version }}-snapshot"
 changelog:
   sort: asc
   filters:

@@ -303,7 +303,35 @@ The files that examples read with `file()` or `filebase64()` must exist, since `
 
 ## Releasing
 
-Tag a commit matching `v*` and push the tag. Afterwards, bump `defaultUpgradeFromVersion` in `internal/provider/upgrade_acc_test.go` to the new release (see [upgrade tests](#upgrade-tests)). The `release` GitHub workflow uses goreleaser to build, sign (GPG) and publish the release, including the Terraform Registry manifest. The repository needs `GPG_PRIVATE_KEY` and `PASSPHRASE` configured as Actions secrets.
+Changes are recorded in [CHANGELOG.md](./CHANGELOG.md). To release:
+
+1. Move the entries under **Unreleased** in `CHANGELOG.md` to a section for the new version and merge that to `main`.
+2. Tag the commit on `main` with the version, prefixed with `v`, and push the tag: `git tag v1.1.0 && git push origin v1.1.0`.
+3. The `release` workflow (`.github/workflows/release.yaml`) runs on every pushed `v*` tag. It runs the unit tests, vets the provider for every release architecture, imports the signing key, runs `goreleaser check` and then `goreleaser release --clean` with the configuration in `.goreleaser.yml`, which publishes a GitHub release in the layout the [Terraform Registry expects](https://developer.hashicorp.com/terraform/registry/providers/publishing):
+   - `terraform-provider-sysutils_<version>_linux_<arch>.zip` for `amd64`, `arm64`, `386` and `arm` (ARMv6), each with the binary `terraform-provider-sysutils_v<version>`, `LICENSE` and `README.md`;
+   - `terraform-provider-sysutils_<version>_manifest.json`, a copy of `terraform-registry-manifest.json`, which declares plugin protocol version 6.0;
+   - `terraform-provider-sysutils_<version>_SHA256SUMS`, the SHA-256 sums of the zips and the manifest, and its detached GPG signature `terraform-provider-sysutils_<version>_SHA256SUMS.sig`.
+4. After the release, bump `defaultUpgradeFromVersion` in `internal/provider/upgrade_acc_test.go` to it, and fill in the first release of the newly released resources in `upgradeFirstRelease` (see [upgrade tests](#upgrade-tests)).
+
+The workflow needs these repository secrets (**Settings → Secrets and variables → Actions**):
+
+| Secret | Contents |
+|--------|----------|
+| `GPG_PRIVATE_KEY` | The ASCII-armored private key that signs `SHA256SUMS`, as printed by `gpg --armor --export-secret-keys <fingerprint>`. The Terraform Registry only accepts RSA and DSA keys, and its public key (`gpg --armor --export <fingerprint>`) must be added to the namespace under **User Settings → Signing Keys** on registry.terraform.io, or the Registry rejects the release. |
+| `PASSPHRASE` | The passphrase of that key. |
+
+`GITHUB_TOKEN` is provided by GitHub Actions; the workflow has `contents: write` permission to create the release.
+
+To check the configuration and build the artifacts locally without publishing anything, install [goreleaser](https://goreleaser.com/install/) v2 and run:
+
+```sh
+goreleaser check
+export GPG_FINGERPRINT=<fingerprint of a local signing key>
+goreleaser release --snapshot --clean   # writes dist/, which git ignores
+cd dist && sha256sum --ignore-missing -c *_SHA256SUMS && gpg --verify *_SHA256SUMS.sig *_SHA256SUMS
+```
+
+The snapshot version is the next patch version with a `-snapshot` suffix. The manifest is attached to the release only when publishing, so `sha256sum` skips it locally. Any key works for a local build, for example a throwaway key in a temporary `GNUPGHOME`.
 
 ## License
 

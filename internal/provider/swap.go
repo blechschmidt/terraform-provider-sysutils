@@ -511,9 +511,11 @@ func fillSwapFile(ctx context.Context, f *os.File, size int64) error {
 // disableCopyOnWrite sets the no-copy-on-write attribute (chattr +C) on the
 // empty file f if it is on btrfs, which refuses to swap to files that
 // have copy-on-write enabled. Failures are ignored: swapon reports them.
+// Statfs_t.Type is an int32 on 32-bit platforms, where the magic number
+// does not fit, so both sides are compared as uint32.
 func disableCopyOnWrite(f *os.File) {
 	var st unix.Statfs_t
-	if unix.Fstatfs(int(f.Fd()), &st) != nil || st.Type != unix.BTRFS_SUPER_MAGIC {
+	if unix.Fstatfs(int(f.Fd()), &st) != nil || uint32(st.Type) != uint32(unix.BTRFS_SUPER_MAGIC) {
 		return
 	}
 	flags, err := unix.IoctlGetUint32(int(f.Fd()), unix.FS_IOC_GETFLAGS)
