@@ -1,0 +1,42 @@
+---
+page_title: "{{.Name}} Ephemeral Resource - terraform-provider-sysutils"
+subcategory: ""
+description: |-
+  Runs a command and returns its output without storing it in the plan or the state.
+---
+
+# {{.Name}} ({{.Type}})
+
+{{ .Description | trimspace }}
+
+An [ephemeral resource](https://developer.hashicorp.com/terraform/language/resources/ephemeral) needs Terraform 1.10 or later, or OpenTofu 1.11 or later. Its values can only be used where Terraform guarantees that they are not stored: in [write-only arguments](https://developer.hashicorp.com/terraform/language/resources/ephemeral#write-only-arguments) such as `content_wo` of [`sysutils_file`](../resources/file.md) (Terraform 1.11 or later, OpenTofu 1.11 or later), in provider configuration, in locals and ephemeral variables and outputs, and in provisioners. Terraform rejects them in ordinary resource arguments.
+
+Unlike the [`sysutils_exec` resource](../resources/exec.md), which runs its command once and records the output in the state, this runs the command whenever Terraform needs the value: during every plan and every apply that uses it, and not at all in runs that don't. Use it for commands that only read, such as fetching a secret from a password manager or a vault, or decrypting a file; use the resource for commands that change something.
+
+## Example Usage
+
+### Fetch a token from a secret store
+
+{{ tffile "examples/ephemeral-resources/sysutils_exec/ephemeral-resource.tf" }}
+
+### Decrypt a file passed on standard input
+
+{{ tffile "examples/ephemeral-resources/sysutils_exec/stdin.tf" }}
+
+{{ .SchemaMarkdown | trimspace }}
+
+## Output and errors
+
+`stdout` and `stderr` are the complete output of the command. More than `max_output_bytes` (1 MiB by default) on either stream is an error, not a truncated value, so that a secret is never silently cut short and written somewhere half-complete. Neither is ever stored in the plan or the state, and both are sensitive, so Terraform redacts anything derived from them.
+
+A non-zero exit fails the operation with `Command exited with non-zero status`, unless `fail_on_nonzero = false`, in which case the exit code is in `exit_code`. Failure diagnostics, which end up in CI logs, never contain standard output, which is where commands usually print secrets; they quote up to 4 KiB of standard error. Don't let the command print secrets to standard error.
+
+The command runs in its own process group, like that of the `sysutils_exec` resource. When `timeout` (5 minutes by default) expires, or Terraform is interrupted, the whole group is killed with `SIGKILL`, and the operation fails with `Command timed out`. The command counts as finished once every process holding its standard output or standard error has closed them; background processes that keep them open for more than 5 seconds after the command exits make it fail.
+
+## Caveats
+
+- The command runs with the privileges and, unless `inherit_parent_environment = false`, the environment of the user running Terraform, on the host, even when the provider's `root_dir` is set. Treat it like a shell script run as that user.
+- Its configuration (`command`, `environment`, `stdin`) is not stored in the state either, so a secret passed to the command, for example in `environment`, stays out of the state as well.
+- Terraform cannot tell when the output changes. To write a changed secret with `content_wo`, increase `content_wo_version`.
+- Invalid UTF-8 in the output is replaced by U+FFFD, since Terraform strings are UTF-8. For binary output, have the command encode it, for example with `base64`, and decode it with `base64decode()`.
+- OpenTofu 1.13.0 plans and applies configurations with ephemeral resources, but `tofu show -json` of a saved plan fails with "no schema found for ephemeral...". Tools that read plans as JSON, such as policy checks, need another OpenTofu version.

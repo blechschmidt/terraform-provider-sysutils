@@ -4,6 +4,12 @@ All notable changes to this provider are listed here. Versions follow [semantic 
 
 ## Unreleased
 
+### New features
+
+- Ephemeral resources, for Terraform 1.10 and later and OpenTofu 1.11 and later. Neither their configuration nor their results are stored in the plan or the state, so they can feed secrets to write-only arguments such as `content_wo` of `sysutils_file`.
+  - [`sysutils_file`](./docs/ephemeral-resources/file.md) reads a local file of at most `max_size` bytes (1 MiB by default, 16 MiB at most) and returns `content`, `content_base64` and `sha256`. It refuses a symlink at `path`, files that belong to another user or are writable by their group or others, and paths through directories that another user could change. It honours the provider's `root_dir`.
+  - [`sysutils_exec`](./docs/ephemeral-resources/exec.md) runs a command with the environment, working directory, standard input and timeout (5 minutes by default) of your choice, and returns `stdout`, `stderr` and `exit_code`. More output than `max_output_bytes` is an error rather than being truncated, and failure diagnostics never quote standard output.
+
 ## 1.3.0 (2026-09-30)
 
 Provider-defined functions, two account list data sources and a write-only `content_wo` for `sysutils_file`. The resources and data sources of v1.2.1 are otherwise unchanged.

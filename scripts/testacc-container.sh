@@ -16,8 +16,9 @@ set -euo pipefail
 # swap file tests do run), and the local-baseline upgrade tests
 # unless SYSUTILS_UPGRADE_FROM_REF is set, as it is in CI, and the
 # file_attributes tests if the file system below /tmp has no inode flags,
-# and the tests gated on the Terraform CLI version outside their range.
-: "${ACC_ALLOWED_SKIPS:=Terraform CLI version [^ ]+ is (below minimum|above maximum) version|the file system of [^ ]+ does not support inode flags|systemd is not PID 1|OpenRC did not boot this host|is not in any release yet|CAP_SYS_MODULE is not in the effective capability set|the kernel does not allow setting [^ ]+ here|cannot attach a loop device|SYSUTILS_UPGRADE_FROM_REF is not set}"
+# and the tests gated on the Terraform CLI version outside their range or
+# skipped on OpenTofu releases with known bugs.
+: "${ACC_ALLOWED_SKIPS:=Terraform CLI version [^ ]+ is (below minimum|above maximum) version|OpenTofu [^ ]+ is skipped: |the file system of [^ ]+ does not support inode flags|systemd is not PID 1|OpenRC did not boot this host|is not in any release yet|CAP_SYS_MODULE is not in the effective capability set|the kernel does not allow setting [^ ]+ here|cannot attach a loop device|SYSUTILS_UPGRADE_FROM_REF is not set}"
 export ACC_ALLOWED_SKIPS
 
 if [ "$(id -u)" -ne 0 ]; then

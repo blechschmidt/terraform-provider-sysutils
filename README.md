@@ -56,6 +56,13 @@ The provider acts on the machine Terraform runs on. It has no remote-execution m
 
 Data sources are read on every plan, so they always reflect the current state of the host.
 
+| Ephemeral resource | Returns | Requires root |
+|--------------------|---------|---------------|
+| [`sysutils_file`](./docs/ephemeral-resources/file.md) | A local file's contents (text, base64) and SHA-256, never stored in the plan or the state; refuses symlinks, files over `max_size` and files that anyone but root or the provider's user could change; reads below `root_dir` if set | Only for files you can't otherwise read |
+| [`sysutils_exec`](./docs/ephemeral-resources/exec.md) | A command's exit code, standard output and standard error, never stored in the plan or the state; for read-only commands such as fetching a secret from a vault, since it runs during every plan and apply | Only if the command needs it |
+
+Ephemeral resources need Terraform 1.10 or later, or OpenTofu 1.11 or later. Their values go to write-only arguments such as `content_wo` of `sysutils_file` (Terraform 1.11 or later, OpenTofu 1.11 or later), provider configuration and other ephemeral contexts.
+
 | Function | Returns | Requires root |
 |----------|---------|---------------|
 | [`provider::sysutils::parse_ini`](./docs/functions/parse_ini.md) | INI content (`php.ini`, systemd units, git config) as a map of sections to maps of keys to values, read like `sysutils_ini_value` reads it | No |
@@ -89,7 +96,7 @@ The only provider argument is the optional `root_dir`. With it, the resources th
 ### Requirements
 
 - Linux. The user and group resources call the `shadow-utils`/`passwd` tools; the file resources rely on Linux-specific system calls.
-- Terraform >= 1.5, or OpenTofu; the provider-defined functions need Terraform >= 1.8 or OpenTofu >= 1.7. CI runs the acceptance tests against Terraform 1.5, the latest Terraform and the latest OpenTofu.
+- Terraform >= 1.5, or OpenTofu; the provider-defined functions need Terraform >= 1.8 or OpenTofu >= 1.7, the ephemeral resources Terraform >= 1.10 or OpenTofu >= 1.11, and write-only arguments Terraform >= 1.11 or OpenTofu >= 1.11. CI runs the acceptance tests against Terraform 1.5, the latest Terraform and the latest OpenTofu.
 - Root privileges for the operations marked in the feature matrix. The provider never elevates privileges itself; run Terraform as root, or with `sudo`, when you need them.
 
 ## Quick example
@@ -146,6 +153,7 @@ For a whole service host in one stack, see [`examples/complete`](./examples/comp
 - [Cookbook guides](#cookbook)
 - Resources: [`sysutils_file`](./docs/resources/file.md), [`sysutils_remote_file`](./docs/resources/remote_file.md), [`sysutils_file_line`](./docs/resources/file_line.md), [`sysutils_ini_value`](./docs/resources/ini_value.md), [`sysutils_hosts_entry`](./docs/resources/hosts_entry.md), [`sysutils_template_file`](./docs/resources/template_file.md), [`sysutils_directory`](./docs/resources/directory.md), [`sysutils_symlink`](./docs/resources/symlink.md), [`sysutils_file_acl`](./docs/resources/file_acl.md), [`sysutils_file_attributes`](./docs/resources/file_attributes.md), [`sysutils_archive_extract`](./docs/resources/archive_extract.md), [`sysutils_user`](./docs/resources/user.md), [`sysutils_group`](./docs/resources/group.md), [`sysutils_systemd_unit`](./docs/resources/systemd_unit.md), [`sysutils_service`](./docs/resources/service.md), [`sysutils_mount`](./docs/resources/mount.md), [`sysutils_swap`](./docs/resources/swap.md), [`sysutils_sysctl`](./docs/resources/sysctl.md), [`sysutils_kernel_module`](./docs/resources/kernel_module.md), [`sysutils_timezone`](./docs/resources/timezone.md), [`sysutils_hostname`](./docs/resources/hostname.md), [`sysutils_locale`](./docs/resources/locale.md), [`sysutils_ssh_authorized_key`](./docs/resources/ssh_authorized_key.md), [`sysutils_cron_job`](./docs/resources/cron_job.md), [`sysutils_sudoers`](./docs/resources/sudoers.md), [`sysutils_limits`](./docs/resources/limits.md), [`sysutils_firewall_rule`](./docs/resources/firewall_rule.md), [`sysutils_package`](./docs/resources/package.md), [`sysutils_package_repository`](./docs/resources/package_repository.md), [`sysutils_alternatives`](./docs/resources/alternatives.md), [`sysutils_exec`](./docs/resources/exec.md)
 - Data sources: [`sysutils_file`](./docs/data-sources/file.md), [`sysutils_directory`](./docs/data-sources/directory.md), [`sysutils_user`](./docs/data-sources/user.md), [`sysutils_group`](./docs/data-sources/group.md), [`sysutils_users`](./docs/data-sources/users.md), [`sysutils_groups`](./docs/data-sources/groups.md), [`sysutils_host`](./docs/data-sources/host.md), [`sysutils_package`](./docs/data-sources/package.md), [`sysutils_service`](./docs/data-sources/service.md), [`sysutils_mount`](./docs/data-sources/mount.md), [`sysutils_sysctl`](./docs/data-sources/sysctl.md)
+- Ephemeral resources: [`sysutils_file`](./docs/ephemeral-resources/file.md), [`sysutils_exec`](./docs/ephemeral-resources/exec.md)
 - Functions: [`parse_ini`](./docs/functions/parse_ini.md), [`parse_os_release`](./docs/functions/parse_os_release.md), [`parse_passwd_line`](./docs/functions/parse_passwd_line.md), [`parse_fstab_line`](./docs/functions/parse_fstab_line.md), [`mode_to_octal`](./docs/functions/mode_to_octal.md)
 - [Examples](./examples), including [`examples/complete`](./examples/complete), a whole service host in one stack
 
@@ -168,7 +176,8 @@ A local user who can write to a directory above a managed path could try to plan
 Terraform state holds every attribute in plain text, and so does anything that has read access to your state backend.
 
 - `sysutils_file` stores `content`, `sensitive_content` and `content_base64` verbatim. `sensitive_content` is hidden in plans, which show only the change of `content_sha256`. For `source`, only the path and checksums are stored. For the write-only `content_wo` (Terraform 1.11 and later), neither the value nor its checksums are stored, only a salted argon2id hash in private state for drift detection: the value is never in the plan or the state, so it can come from an ephemeral variable or resource.
-- The `sysutils_file` data source stores the file's contents. Don't point it at secrets.
+- The `sysutils_file` data source stores the file's contents. Don't point it at secrets; read them with the `sysutils_file` ephemeral resource instead, which stores nothing.
+- The `sysutils_file` and `sysutils_exec` ephemeral resources store nothing: neither their configuration nor their results are in the plan or the state. Pass their values to `content_wo` to write a secret into a file.
 - `sysutils_file_line` stores the managed line or block, and `sysutils_ini_value` the managed value.
 - `sysutils_template_file` stores the template, its variables and the rendered content. With `sensitive_vars`, the rendered content goes into the sensitive `rendered_sensitive` attribute, so it's hidden in plans, but it is still in state.
 - `sysutils_systemd_unit` stores the unit file's contents.
@@ -182,7 +191,7 @@ Don't manage secrets with these resources unless your state backend encrypts dat
 
 - `sensitive_output = true` moves the output into `sensitive_stdout` and `sensitive_stderr`, which are redacted in plans, CLI output and error diagnostics, but are still stored in state.
 - `max_output_bytes` (1 MiB by default) caps how much output is stored, which keeps state small for chatty commands. `stdout_sha256` and `stderr_sha256` always cover the complete output and are never sensitive.
-- To keep a secret out of state altogether, have the command read it from a file or secret store itself instead of passing it through Terraform.
+- To keep a secret out of state altogether, have the command read it from a file or secret store itself instead of passing it through Terraform, or fetch it with the `sysutils_exec` ephemeral resource, which stores neither its configuration nor its output, and write it with `content_wo`.
 
 ### Running as root
 

@@ -5,13 +5,14 @@ import (
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
+	"github.com/hashicorp/terraform-plugin-framework/ephemeral"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 )
 
-// TestSchemaMarkdownDescriptions ensures that every resource, data source and
-// attribute has a MarkdownDescription. The docs under docs/ are generated
-// from these descriptions by tfplugindocs, so a missing one would show up as
-// an undocumented attribute.
+// TestSchemaMarkdownDescriptions ensures that every resource, data source,
+// ephemeral resource and attribute has a MarkdownDescription. The docs under
+// docs/ are generated from these descriptions by tfplugindocs, so a missing
+// one would show up as an undocumented attribute.
 func TestSchemaMarkdownDescriptions(t *testing.T) {
 	ctx := context.Background()
 	p := &sysutilsProvider{}
@@ -46,6 +47,23 @@ func TestSchemaMarkdownDescriptions(t *testing.T) {
 		for name, attr := range resp.Schema.Attributes {
 			if attr.GetMarkdownDescription() == "" {
 				t.Errorf("data source %s: attribute %q is missing a MarkdownDescription", meta.TypeName, name)
+			}
+		}
+	}
+
+	for _, newEphemeral := range p.EphemeralResources(ctx) {
+		e := newEphemeral()
+		var meta ephemeral.MetadataResponse
+		e.Metadata(ctx, ephemeral.MetadataRequest{ProviderTypeName: "sysutils"}, &meta)
+		var resp ephemeral.SchemaResponse
+		e.Schema(ctx, ephemeral.SchemaRequest{}, &resp)
+
+		if resp.Schema.MarkdownDescription == "" {
+			t.Errorf("ephemeral resource %s: missing MarkdownDescription", meta.TypeName)
+		}
+		for name, attr := range resp.Schema.Attributes {
+			if attr.GetMarkdownDescription() == "" {
+				t.Errorf("ephemeral resource %s: attribute %q is missing a MarkdownDescription", meta.TypeName, name)
 			}
 		}
 	}

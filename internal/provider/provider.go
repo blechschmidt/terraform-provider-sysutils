@@ -6,6 +6,7 @@ import (
 
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/diag"
+	"github.com/hashicorp/terraform-plugin-framework/ephemeral"
 	"github.com/hashicorp/terraform-plugin-framework/function"
 	"github.com/hashicorp/terraform-plugin-framework/path"
 	"github.com/hashicorp/terraform-plugin-framework/provider"
@@ -105,8 +106,8 @@ type providerData struct {
 	alternatives *alternativesConfig
 	host         *hostConfig
 	// root is the directory that the paths of the file, file line, template
-	// file, directory, symlink, archive extract, cron job, sudoers, package repository, timezone, hostname, locale and swap resources and the file and
-	// directory data sources are confined to, that the host data source
+	// file, directory, symlink, archive extract, cron job, sudoers, package repository, timezone, hostname, locale and swap resources, the file and
+	// directory data sources and the file ephemeral resource are confined to, that the host data source
 	// reads os-release and looks for package managers in, and that the
 	// mount and sysctl data sources read fstab and sysctl configuration
 	// below; see rootfs.go.
@@ -138,7 +139,7 @@ func (p *sysutilsProvider) Schema(_ context.Context, _ provider.SchemaRequest, r
 				MarkdownDescription: "Directory that every managed path is relative to, as if the provider ran in a chroot there. " +
 					"With `root_dir = \"/srv/rootfs\"`, a `sysutils_file` with `path = \"/etc/hosts\"` writes `/srv/rootfs/etc/hosts`. " +
 					"Use it to build a container or OS image root filesystem tree. " +
-					"Applies to the `sysutils_file`, `sysutils_file_line`, `sysutils_ini_value`, `sysutils_hosts_entry`, `sysutils_template_file`, `sysutils_directory`, `sysutils_symlink`, `sysutils_archive_extract` (its `destination`), `sysutils_cron_job`, `sysutils_sudoers`, `sysutils_package_repository`, `sysutils_timezone`, `sysutils_hostname` (which then only writes files and leaves the kernel hostname alone), `sysutils_locale` and `sysutils_swap` resources and the `sysutils_file` and `sysutils_directory` data sources. " +
+					"Applies to the `sysutils_file`, `sysutils_file_line`, `sysutils_ini_value`, `sysutils_hosts_entry`, `sysutils_template_file`, `sysutils_directory`, `sysutils_symlink`, `sysutils_archive_extract` (its `destination`), `sysutils_cron_job`, `sysutils_sudoers`, `sysutils_package_repository`, `sysutils_timezone`, `sysutils_hostname` (which then only writes files and leaves the kernel hostname alone), `sysutils_locale` and `sysutils_swap` resources, the `sysutils_file` and `sysutils_directory` data sources and the `sysutils_file` ephemeral resource. " +
 					"The `sysutils_host` data source reads `os-release` and looks for the package manager below it, but reports the running host's kernel, names, hardware, init system and firewall. " +
 					"The `sysutils_mount` data source reads `/etc/fstab` below it and reports only the mounts below it, with paths relative to it, and the `sysutils_sysctl` data source reads the sysctl configuration files below it and leaves the running kernel's values null. " +
 					"`sysutils_mount`, `sysutils_sysctl`, `sysutils_kernel_module`, `sysutils_service`, `sysutils_package`, `sysutils_ssh_authorized_key`, `sysutils_firewall_rule` and `sysutils_alternatives` change the running host and refuse to plan when `root_dir` is set, as does `sysutils_package_repository` with `refresh_cache = true`, `sysutils_locale` with `generate = true` and `sysutils_swap` with `enabled = true` or a block device. " +
@@ -176,6 +177,7 @@ func (p *sysutilsProvider) Configure(ctx context.Context, req provider.Configure
 	data := &providerData{systemd: p.systemd, mount: p.mount, sysctl: p.sysctl, kernelModule: p.kernelModule, cron: p.cron, sudoers: p.sudoers, pkg: p.pkg, repo: p.repo, service: p.service, sshKey: p.sshKey, timezone: p.timezone, hostname: p.hostname, locale: p.locale, firewall: p.firewall, swap: p.swap, alternatives: p.alternatives, host: p.host, root: root}
 	resp.ResourceData = data
 	resp.DataSourceData = data
+	resp.EphemeralResourceData = data
 }
 
 // providerDataFrom converts the value passed to Configure of a resource or
@@ -316,6 +318,17 @@ func (p *sysutilsProvider) Functions(_ context.Context) []func() function.Functi
 }
 
 var _ provider.ProviderWithFunctions = (*sysutilsProvider)(nil)
+
+// EphemeralResources implements provider.ProviderWithEphemeralResources.
+// Terraform before 1.10 and OpenTofu before 1.11 ignore them.
+func (p *sysutilsProvider) EphemeralResources(_ context.Context) []func() ephemeral.EphemeralResource {
+	return []func() ephemeral.EphemeralResource{
+		NewFileEphemeralResource,
+		NewExecEphemeralResource,
+	}
+}
+
+var _ provider.ProviderWithEphemeralResources = (*sysutilsProvider)(nil)
 
 func (p *sysutilsProvider) DataSources(_ context.Context) []func() datasource.DataSource {
 	return []func() datasource.DataSource{

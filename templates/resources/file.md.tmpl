@@ -39,6 +39,10 @@ A changed `content_wo` alone plans no change.
 
 With Terraform before 1.11 and OpenTofu before 1.11, a configuration that sets `content_wo` fails validation with "Write-only attributes are only supported in Terraform 1.11 and later".
 
+The provider's own ephemeral resources are made for this. The [`sysutils_file` ephemeral resource](../ephemeral-resources/file.md) reads a secret from a local file, and refuses files and directories that anyone but root or the user running Terraform could change, so that nobody can slip in a value of their own. The [`sysutils_exec` ephemeral resource](../ephemeral-resources/exec.md) runs a command, for example a vault or password manager CLI, and returns its output. Neither stores its configuration or its results anywhere:
+
+{{ tffile "examples/ephemeral-resources/sysutils_exec/ephemeral-resource.tf" }}
+
 `sysutils_template_file` has no write-only variant, because it records the rendered content in state for its diffs. To render a template with secrets that must not be stored, pass `templatefile()` to `content_wo`; its result is ephemeral if any of its variables is.
 
 {{ .SchemaMarkdown | trimspace }}

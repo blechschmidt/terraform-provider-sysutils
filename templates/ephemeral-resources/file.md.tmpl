@@ -1,0 +1,55 @@
+---
+page_title: "{{.Name}} Ephemeral Resource - terraform-provider-sysutils"
+subcategory: ""
+description: |-
+  Reads a local secret file without storing it in the plan or the state.
+---
+
+# {{.Name}} ({{.Type}})
+
+{{ .Description | trimspace }}
+
+An [ephemeral resource](https://developer.hashicorp.com/terraform/language/resources/ephemeral) needs Terraform 1.10 or later, or OpenTofu 1.11 or later. Its values can only be used where Terraform guarantees that they are not stored: in [write-only arguments](https://developer.hashicorp.com/terraform/language/resources/ephemeral#write-only-arguments) such as `content_wo` of [`sysutils_file`](../resources/file.md) (Terraform 1.11 or later, OpenTofu 1.11 or later), in provider configuration, in locals and ephemeral variables and outputs, and in provisioners. Terraform rejects them in ordinary resource arguments.
+
+Unlike the [`sysutils_file` data source](../data-sources/file.md), which stores the contents in the state, this reads the file whenever Terraform needs the value: during every plan and every apply that uses it. The value can therefore differ between plan and apply; since write-only arguments are not part of the plan, that is not an error.
+
+## Example Usage
+
+### Copy a secret into a file of the application
+
+{{ tffile "examples/ephemeral-resources/sysutils_file/ephemeral-resource.tf" }}
+
+### Binary files
+
+{{ tffile "examples/ephemeral-resources/sysutils_file/binary.tf" }}
+
+{{ .SchemaMarkdown | trimspace }}
+
+## Which files are read
+
+A secret is only as trustworthy as the file it comes from. If another user could write the file, or replace it with a file or symlink of their own, they could feed Terraform a value of their choosing, for example their own SSH key or a password they know. So the file is only read if nobody but root and the user running Terraform can change it:
+
+- `path` itself must not be a symlink, and it must be a regular file. It is opened with `O_NOFOLLOW` and non-blocking, so neither a symlink nor a FIFO planted at `path` is followed or waited on.
+- The file must belong to root or the user running Terraform, and must not be writable by its group or by others (`chmod go-w`).
+- Every directory on the way to it, including the targets of symlinks in the parent components, must belong to root or the user running Terraform and must not be writable by others. A sticky directory such as `/tmp` is allowed, but then the next component must belong to root or the user running Terraform as well.
+- It must not be larger than `max_size`. The ownership, mode and size are checked on the open file, so the file that is read is the file that was checked.
+
+With the provider's [`root_dir`](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs#root-directory) set, `path` is inside the root, and symlinks in the tree are resolved as they would be in a chroot; one that leads above the root is an error. The directories of the root itself must then be trusted as described above.
+
+## Errors
+
+| Situation | Diagnostic |
+|-----------|------------|
+| Nothing exists at `path` (or a parent directory is missing) | `Unable to read file` with "no such file or directory" |
+| `path` is a symlink | `Unable to read file` with "is a symbolic link; refusing to follow it" |
+| `path` is a directory, FIFO, socket or device | `Unable to read file` with "is not a regular file" |
+| The file belongs to another user, or is writable by its group or others | `Unable to read file` with "belongs to user" or "is writable by its group or other users" |
+| A directory on the way belongs to another user or is writable by others | `Unable to read file` with "belongs to user" or "is writable by other users" |
+| The file is larger than `max_size` | `Unable to read file` with "is larger than max_size" |
+
+## Caveats
+
+- `content` and `content_base64` are sensitive, so Terraform redacts anything derived from them. `sha256` is not, but like every ephemeral value it is never stored.
+- The contents are held in memory and sent to Terraform twice (as text and as base64), hence the 16 MiB limit of `max_size`.
+- Terraform cannot tell when the file changes. To write a changed secret with `content_wo`, increase `content_wo_version`.
+- OpenTofu 1.13.0 plans and applies configurations with ephemeral resources, but `tofu show -json` of a saved plan fails with "no schema found for ephemeral...". Tools that read plans as JSON, such as policy checks, need another OpenTofu version.

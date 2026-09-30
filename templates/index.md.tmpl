@@ -55,6 +55,13 @@ The `sysutils` provider exposes a small set of primitives for host-level adminis
 | [`sysutils_package`](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs/data-sources/package) | Read whether an OS package is installed, its version and architecture, and the version the package index offers. |
 | [`sysutils_service`](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs/data-sources/service) | Read whether a service exists, starts at boot and is running. |
 
+| Ephemeral Resource | Purpose |
+|--------------------|---------|
+| [`sysutils_file`](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs/ephemeral-resources/file) | Read a local secret file, refusing symlinks and files other users can change, without storing it in the plan or the state. |
+| [`sysutils_exec`](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs/ephemeral-resources/exec) | Run a command, for example to fetch a secret from a vault, and return its output without storing it in the plan or the state. |
+
+Ephemeral resources need Terraform 1.10 or later, or OpenTofu 1.11 or later. Pass their values to write-only arguments such as `content_wo` of `sysutils_file` (Terraform 1.11 or later) to keep secrets out of the state altogether.
+
 | Function | Purpose |
 |----------|---------|
 | [`provider::sysutils::parse_ini`](https://registry.terraform.io/providers/blechschmidt/sysutils/latest/docs/functions/parse_ini) | Parse INI content into a map of sections to maps of keys to values, the way `sysutils_ini_value` reads it. |
