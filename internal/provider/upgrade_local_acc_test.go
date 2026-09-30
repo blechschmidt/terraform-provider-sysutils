@@ -939,6 +939,34 @@ resource "sysutils_timezone" "test" {
 	})
 }
 
+func TestAccUpgradeLocal_hostname(t *testing.T) {
+	// Below a root_dir, so that only files are written and the host's
+	// hostname is left alone.
+	root := testRootDir(t)
+	mustWrite(t, filepath.Join(root, "etc", "hostname"), "before\n")
+	mustWrite(t, filepath.Join(root, "etc", "hosts"), "127.0.0.1 localhost\n127.0.1.1 before\n")
+	resource.Test(t, resource.TestCase{
+		Steps: localUpgradeSteps(t, "sysutils_hostname", fmt.Sprintf(`
+provider "sysutils" {
+  root_dir = %q
+}
+
+resource "sysutils_hostname" "test" {
+  hostname           = "web1.example.com"
+  pretty_hostname    = "Web server 1"
+  manage_hosts_entry = true
+  restore_on_destroy = true
+}
+`, root)),
+		// The private state recorded by the baseline still restores.
+		CheckDestroy: resource.ComposeAggregateTestCheckFunc(
+			checkFileText(filepath.Join(root, "etc", "hostname"), "before\n"),
+			checkFileText(filepath.Join(root, "etc", "hosts"), "127.0.0.1 localhost\n127.0.1.1 before\n"),
+			checkPathGone(filepath.Join(root, "etc", "machine-info")),
+		),
+	})
+}
+
 func TestAccUpgradeLocal_locale(t *testing.T) {
 	// Below a root_dir, so that the host's locale is left alone.
 	root := testRootDir(t)
