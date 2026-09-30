@@ -2,14 +2,14 @@
 page_title: "Cookbook: Hardening a host"
 subcategory: "Cookbook"
 description: |-
-  Apply a hardening baseline: kernel parameters, disabled kernel modules, SSH settings, private directories and an audit of system directory permissions.
+  Apply a hardening baseline: kernel parameters, disabled kernel modules, SSH settings, private directories, persistent and bounded logs, and an audit of system directory permissions.
 ---
 
 # Cookbook: Hardening a host
 
 Hardening baselines such as the CIS benchmarks are mostly long lists of small settings: a kernel parameter here, a disabled module there, a file that must not be readable by others. Each one is easy to set by hand and just as easy to lose, for example to a package upgrade, a colleague debugging something, or a new image. Managed with Terraform, every setting has a resource, and `terraform plan` reports any that no longer holds.
 
-This recipe uses [`sysutils_sysctl`](../resources/sysctl.md), [`sysutils_kernel_module`](../resources/kernel_module.md), [`sysutils_file`](../resources/file.md), [`sysutils_service`](../resources/service.md), [`sysutils_directory`](../resources/directory.md) and the [`sysutils_directory` data source](../data-sources/directory.md). Apply it as root. The complete configuration is in [`examples/guides/hardening`](https://github.com/blechschmidt/terraform-provider-sysutils/tree/main/examples/guides/hardening).
+This recipe uses [`sysutils_sysctl`](../resources/sysctl.md), [`sysutils_kernel_module`](../resources/kernel_module.md), [`sysutils_file`](../resources/file.md), [`sysutils_service`](../resources/service.md), [`sysutils_directory`](../resources/directory.md), [`sysutils_journald_config`](../resources/journald_config.md), [`sysutils_sudoers`](../resources/sudoers.md), [`sysutils_logrotate`](../resources/logrotate.md) and the [`sysutils_directory` data source](../data-sources/directory.md). Apply it as root. The complete configuration is in [`examples/guides/hardening`](https://github.com/blechschmidt/terraform-provider-sysutils/tree/main/examples/guides/hardening).
 
 ~> **Test on a machine you can reach another way first.** The SSH settings below disable password and root logins. Before you apply them to a remote host, make sure you can log in with a key as a user with sudo rights (see [Bootstrapping a host](./bootstrap-host.md)). Otherwise, keep a console open.
 
@@ -212,6 +212,52 @@ Directories writable by users other than root: /etc/cron.d (root:root 0777).
 ```
 
 Checks need Terraform 1.5 or later, or OpenTofu. The data source also stores the directories' entry names in the state, so keep it to directories with few entries.
+
+## Logs
+
+```terraform
+# Keep the journal on disk, so that logs survive a reboot, but bounded in
+# size and age. Settings that are not set keep their defaults.
+resource "sysutils_journald_config" "hardening" {
+  name              = "60-hardening"
+  storage           = "persistent"
+  compress          = true
+  system_max_use    = "2G"
+  max_retention_sec = "3month"
+
+  # Needs systemd; set it to false when building an image with root_dir.
+  restart = true
+}
+
+# sudo's own log of every command run through it, readable only by root.
+resource "sysutils_sudoers" "logfile" {
+  name    = "10-logfile"
+  content = "Defaults logfile=\"/var/log/sudo.log\"\n"
+}
+
+# Rotate that log weekly and keep a year of it. Re-created with the same
+# restrictive mode after each rotation.
+resource "sysutils_logrotate" "sudo" {
+  name         = "sudo-log"
+  paths        = ["/var/log/sudo.log"]
+  frequency    = "weekly"
+  rotate       = 52
+  compress     = true
+  missingok    = true
+  notifempty   = true
+  create_mode  = "0600"
+  create_owner = "root"
+  create_group = "root"
+}
+```
+
+Baselines ask for logs that survive a reboot and an attacker's attempt to fill the disk, and for a record of privileged commands. By default, most distributions keep the journal in memory only (`Storage=auto` without `/var/log/journal`), so every reboot loses it.
+
+**The journal.** `sysutils_journald_config` writes `/etc/systemd/journald.conf.d/60-hardening.conf` rather than editing `journald.conf`, which a package upgrade may replace. `storage = "persistent"` creates `/var/log/journal` when journald starts. `system_max_use` and `max_retention_sec` bound the space and time the journal keeps, so that a flood of messages rotates old entries away instead of filling `/var`. journald reads its configuration only when it starts, so `restart = true` restarts it after every change of the file, and the plan fails early on a host without systemd. A later drop-in, such as `90-...` from a package, overrides these settings, and a plan does not show that; `systemd-analyze cat-config systemd/journald.conf` shows all files in the order they apply.
+
+**Rotation of other logs.** Logs that don't go to the journal need rotation, or they grow until the disk is full. The sudo log above is written by sudo itself; `sysutils_logrotate` rotates it weekly, keeps a year of compressed copies, and has logrotate re-create the file with mode `0600` right after each rotation, so there is never a window in which it is readable by others. Every drop-in is checked with `logrotate -d` before it is installed, so a typo can't make logrotate silently skip the block.
+
+Both resources show edits made outside Terraform in the next plan, and apply reverts them.
 
 ## Firewall
 

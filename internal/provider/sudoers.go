@@ -12,7 +12,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -330,19 +329,20 @@ func checkSudoersFile(ctx context.Context, run commandRunner, bin, tmp, display 
 	return &visudoError{output: strings.ToValidUTF8(out, "�")}
 }
 
+// sudoersDropIn describes the drop-ins, owned by uid:gid.
+func sudoersDropIn(uid, gid uint32) dropInSpec {
+	return dropInSpec{mode: sudoersFileMode, dirMode: sudoersDirMode, maxSize: maxSudoersFileSize, uid: uid, gid: gid}
+}
+
 // readSudoersFile reads a drop-in without following symlinks. A missing file
 // reads as nil data with a nil snapshot.
 func readSudoersFile(p string) ([]byte, *fileSnapshot, error) {
-	data, snap, err := readRegularFileNoFollow(p, maxSudoersFileSize)
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil, nil, nil
-	}
-	return data, snap, err
+	return sudoersDropIn(0, 0).read(p)
 }
 
 // errSudoersFileExists is returned by writeSudoersFile when a new drop-in
 // already exists.
-var errSudoersFileExists = errors.New("file already exists")
+var errSudoersFileExists = errDropInExists
 
 // writeSudoersFile atomically makes the drop-in at p contain data, with
 // mode 0440 and owned by uid:gid, whatever the mode and owner of an existing
@@ -353,65 +353,12 @@ var errSudoersFileExists = errors.New("file already exists")
 // With create set, an existing file is an error. A missing sudoers.d is
 // created with mode 0750.
 func writeSudoersFile(p string, data []byte, uid, gid uint32, create bool, check func(tmp string) error) error {
-	unlock, err := lockFileForEdit(p)
-	if err != nil {
-		return err
-	}
-	defer unlock()
-	_, snap, err := readSudoersFile(p)
-	if err != nil {
-		return err
-	}
-	if create && snap != nil {
-		return fmt.Errorf("%s: %w", p, errSudoersFileExists)
-	}
-	attrs := replaceAttrs{mode: sudoersFileMode, chown: true, uid: uid, gid: gid, dropACL: true, check: check}
-	if snap != nil {
-		attrs.xattrs = make(map[string][]byte, len(snap.xattrs))
-		for k, v := range snap.xattrs {
-			if k != aclAccessXattr {
-				attrs.xattrs[k] = v
-			}
-		}
-	} else if err := ensureSudoersDir(filepath.Dir(p)); err != nil {
-		return err
-	}
-	return replaceFileAtomicWith(p, data, snap, attrs)
-}
-
-// ensureSudoersDir creates dir with mode 0750, and its parents with mode
-// 0755, if it does not exist.
-func ensureSudoersDir(dir string) error {
-	if err := os.MkdirAll(filepath.Dir(dir), 0o755); err != nil {
-		return err
-	}
-	if err := os.Mkdir(dir, sudoersDirMode); err != nil && !errors.Is(err, fs.ErrExist) {
-		return err
-	}
-	return nil
+	return sudoersDropIn(uid, gid).write(p, data, create, check)
 }
 
 // removeSudoersFile removes the drop-in at p. A missing file is not an
 // error; anything other than a regular file is left alone.
 func removeSudoersFile(p string) error {
-	unlock, err := lockFileForEdit(p)
-	if err != nil {
-		return err
-	}
-	defer unlock()
-	info, err := os.Lstat(p)
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	if err := checkRegularFile(p, info); err != nil {
-		return err
-	}
-	if err := os.Remove(p); err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return err
-	}
-	syncDir(filepath.Dir(p))
-	return nil
+	_, err := removeDropInFile(p)
+	return err
 }

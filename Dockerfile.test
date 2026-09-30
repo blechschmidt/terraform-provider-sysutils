@@ -20,6 +20,7 @@ ARG TF_CLI_VERSION=latest
 # nftables, iptables, iproute2: the firewall rule tests, which run them in a
 # network namespace of their own.
 # sudo: visudo for the sudoers tests.
+# logrotate: logrotate -d for the logrotate tests.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         acl \
@@ -29,6 +30,7 @@ RUN apt-get update \
         iproute2 \
         iptables \
         locales \
+        logrotate \
         nftables \
         passwd \
         sudo \

@@ -534,6 +534,9 @@ type replaceAttrs struct {
 	// file, which already has these attributes, before it is renamed into
 	// place. An error abandons the edit and leaves target untouched.
 	check func(tmp string) error
+	// tmpSuffix ends the name of the temporary file, so that programs that
+	// read every file in the directory, such as logrotate, skip it.
+	tmpSuffix string
 }
 
 // replaceFileAtomicWith is replaceFileAtomic with explicitly given
@@ -547,7 +550,7 @@ type replaceAttrs struct {
 func replaceFileAtomicWith(target string, data []byte, orig *fileSnapshot, attrs replaceAttrs) (err error) {
 	dir, base := filepath.Dir(target), filepath.Base(target)
 	defer func() { err = explainImmutable(err, target, dir) }()
-	tmp := filepath.Join(dir, "."+base+".sysutils-tmp-"+randomID())
+	tmp := filepath.Join(dir, "."+base+".sysutils-tmp-"+randomID()+attrs.tmpSuffix)
 	f, err := openNoFollow(tmp, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o600)
 	if err != nil {
 		return fmt.Errorf("creating temporary file: %w", err)

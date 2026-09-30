@@ -1168,3 +1168,53 @@ resource "sysutils_file_attributes" "test" {
 		CheckDestroy: checkFileAttrs(p, ""),
 	})
 }
+
+func TestAccUpgradeLocal_logrotate(t *testing.T) {
+	root := t.TempDir()
+	resource.Test(t, resource.TestCase{
+		Steps: localUpgradeSteps(t, "sysutils_logrotate", fmt.Sprintf(`
+provider "sysutils" {
+  root_dir = %q
+}
+
+resource "sysutils_logrotate" "test" {
+  name          = "myapp"
+  paths         = ["/var/log/myapp/*.log", "/var/log/my app/out.log"]
+  frequency     = "daily"
+  rotate        = 7
+  compress      = true
+  delaycompress = false
+  missingok     = true
+  create_mode   = "0640"
+  create_owner  = "root"
+  create_group  = "root"
+  postrotate    = "systemctl kill -s HUP myapp.service\n"
+  extra_directives = ["maxsize 100M", "dateext"]
+}
+`, root),
+			statecheck.ExpectKnownValue("sysutils_logrotate.test", tfjsonpath.New("path"), knownvalue.StringExact("/etc/logrotate.d/myapp"))),
+		CheckDestroy: checkPathGone(filepath.Join(root, "etc", "logrotate.d", "myapp")),
+	})
+}
+
+func TestAccUpgradeLocal_journaldConfig(t *testing.T) {
+	root := t.TempDir()
+	resource.Test(t, resource.TestCase{
+		Steps: localUpgradeSteps(t, "sysutils_journald_config", fmt.Sprintf(`
+provider "sysutils" {
+  root_dir = %q
+}
+
+resource "sysutils_journald_config" "test" {
+  name              = "90-hardening"
+  storage           = "persistent"
+  system_max_use    = "500M"
+  max_retention_sec = "1month"
+  forward_to_syslog = false
+  extra             = { RateLimitBurst = "10000" }
+}
+`, root),
+			statecheck.ExpectKnownValue("sysutils_journald_config.test", tfjsonpath.New("restart"), knownvalue.Bool(false))),
+		CheckDestroy: checkPathGone(filepath.Join(root, "etc", "systemd", "journald.conf.d", "90-hardening.conf")),
+	})
+}

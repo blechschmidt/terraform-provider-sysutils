@@ -40,6 +40,14 @@ type sysutilsProvider struct {
 	// sysutils_sudoers. It is nil in production and set by tests to a
 	// temporary directory or a fake visudo.
 	sudoers *sudoersConfig
+	// logrotate overrides the logrotate.d directory and logrotate of
+	// sysutils_logrotate. It is nil in production and set by tests to a
+	// temporary directory or a fake logrotate.
+	logrotate *logrotateConfig
+	// journald overrides the journald.conf.d directory of
+	// sysutils_journald_config. It is nil in production and set by tests to
+	// a temporary directory.
+	journald *journaldConfig
 	// pkg overrides how sysutils_package reaches the package manager. It is
 	// nil in production and set by unit tests to a fake package manager or
 	// command runner.
@@ -95,6 +103,8 @@ type providerData struct {
 	kernelModule *kernelModuleConfig
 	cron         *cronConfig
 	sudoers      *sudoersConfig
+	logrotate    *logrotateConfig
+	journald     *journaldConfig
 	pkg          *packageConfig
 	repo         *repoConfig
 	service      *serviceConfig
@@ -107,7 +117,7 @@ type providerData struct {
 	alternatives *alternativesConfig
 	host         *hostConfig
 	// root is the directory that the paths of the file, file line, template
-	// file, directory, symlink, archive extract, cron job, sudoers, package repository, timezone, hostname, locale and swap resources, the file and
+	// file, directory, symlink, archive extract, cron job, sudoers, logrotate, journald config, package repository, timezone, hostname, locale and swap resources, the file and
 	// directory data sources and the file ephemeral resource are confined to, that the host data source
 	// reads os-release and looks for package managers in, and that the
 	// mount and sysctl data sources read fstab and sysctl configuration
@@ -132,7 +142,7 @@ func (p *sysutilsProvider) Metadata(_ context.Context, _ provider.MetadataReques
 
 func (p *sysutilsProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *provider.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		MarkdownDescription: "The `sysutils` provider exposes a small set of primitives for host-level administration from Terraform: files, `/etc/hosts` entries, directories, symlinks, archives, local users and groups, systemd units and services, mounts, swap, kernel parameters and modules, the hostname, time zone and locale, cron jobs, sudo rules, SSH authorized keys, firewall rules, OS packages and package repositories, alternatives links, and command execution, and reports host facts such as the distribution for use in conditionals. " +
+		MarkdownDescription: "The `sysutils` provider exposes a small set of primitives for host-level administration from Terraform: files, `/etc/hosts` entries, directories, symlinks, archives, local users and groups, systemd units and services, mounts, swap, kernel parameters and modules, the hostname, time zone and locale, cron jobs, sudo rules, log rotation and journald settings, SSH authorized keys, firewall rules, OS packages and package repositories, alternatives links, and command execution, and reports host facts such as the distribution for use in conditionals. " +
 			"All arguments are optional.",
 		Attributes: map[string]schema.Attribute{
 			"root_dir": schema.StringAttribute{
@@ -140,10 +150,10 @@ func (p *sysutilsProvider) Schema(_ context.Context, _ provider.SchemaRequest, r
 				MarkdownDescription: "Directory that every managed path is relative to, as if the provider ran in a chroot there. " +
 					"With `root_dir = \"/srv/rootfs\"`, a `sysutils_file` with `path = \"/etc/hosts\"` writes `/srv/rootfs/etc/hosts`. " +
 					"Use it to build a container or OS image root filesystem tree. " +
-					"Applies to the `sysutils_file`, `sysutils_file_line`, `sysutils_ini_value`, `sysutils_hosts_entry`, `sysutils_template_file`, `sysutils_directory`, `sysutils_symlink`, `sysutils_archive_extract` (its `destination`), `sysutils_cron_job`, `sysutils_sudoers`, `sysutils_package_repository`, `sysutils_timezone`, `sysutils_hostname` (which then only writes files and leaves the kernel hostname alone), `sysutils_locale` and `sysutils_swap` resources, the `sysutils_file` and `sysutils_directory` data sources and the `sysutils_file` ephemeral resource. " +
+					"Applies to the `sysutils_file`, `sysutils_file_line`, `sysutils_ini_value`, `sysutils_hosts_entry`, `sysutils_template_file`, `sysutils_directory`, `sysutils_symlink`, `sysutils_archive_extract` (its `destination`), `sysutils_cron_job`, `sysutils_sudoers`, `sysutils_logrotate`, `sysutils_journald_config`, `sysutils_package_repository`, `sysutils_timezone`, `sysutils_hostname` (which then only writes files and leaves the kernel hostname alone), `sysutils_locale` and `sysutils_swap` resources, the `sysutils_file` and `sysutils_directory` data sources and the `sysutils_file` ephemeral resource. " +
 					"The `sysutils_host` data source reads `os-release` and looks for the package manager below it, but reports the running host's kernel, names, hardware, init system and firewall. " +
 					"The `sysutils_mount` data source reads `/etc/fstab` below it and reports only the mounts below it, with paths relative to it, and the `sysutils_sysctl` data source reads the sysctl configuration files below it and leaves the running kernel's values null. " +
-					"`sysutils_mount`, `sysutils_sysctl`, `sysutils_kernel_module`, `sysutils_service`, `sysutils_package`, `sysutils_ssh_authorized_key`, `sysutils_firewall_rule`, `sysutils_alternatives` and the `sysutils_service` and `sysutils_systemd_daemon_reload` actions change the running host and refuse to plan when `root_dir` is set, as does `sysutils_package_repository` with `refresh_cache = true`, `sysutils_locale` with `generate = true` and `sysutils_swap` with `enabled = true` or a block device. " +
+					"`sysutils_mount`, `sysutils_sysctl`, `sysutils_kernel_module`, `sysutils_service`, `sysutils_package`, `sysutils_ssh_authorized_key`, `sysutils_firewall_rule`, `sysutils_alternatives` and the `sysutils_service` and `sysutils_systemd_daemon_reload` actions change the running host and refuse to plan when `root_dir` is set, as does `sysutils_package_repository` with `refresh_cache = true`, `sysutils_locale` with `generate = true`, `sysutils_journald_config` with `restart = true` and `sysutils_swap` with `enabled = true` or a block device. " +
 					"`path` attributes, ids and import ids keep the path inside the root. " +
 					"Symlinks inside the root are resolved as they would be in a chroot: absolute link targets are relative to `root_dir`, and a link that leads above `root_dir` is an error, so no symlink in the tree can make the provider act outside it. " +
 					"Must be an absolute path in canonical form; symlinks in `root_dir` itself are followed. It must exist when a resource or data source is read or applied. " +
@@ -175,7 +185,7 @@ func (p *sysutilsProvider) Configure(ctx context.Context, req provider.Configure
 			return
 		}
 	}
-	data := &providerData{systemd: p.systemd, mount: p.mount, sysctl: p.sysctl, kernelModule: p.kernelModule, cron: p.cron, sudoers: p.sudoers, pkg: p.pkg, repo: p.repo, service: p.service, sshKey: p.sshKey, timezone: p.timezone, hostname: p.hostname, locale: p.locale, firewall: p.firewall, swap: p.swap, alternatives: p.alternatives, host: p.host, root: root}
+	data := &providerData{systemd: p.systemd, mount: p.mount, sysctl: p.sysctl, kernelModule: p.kernelModule, cron: p.cron, sudoers: p.sudoers, logrotate: p.logrotate, journald: p.journald, pkg: p.pkg, repo: p.repo, service: p.service, sshKey: p.sshKey, timezone: p.timezone, hostname: p.hostname, locale: p.locale, firewall: p.firewall, swap: p.swap, alternatives: p.alternatives, host: p.host, root: root}
 	resp.ResourceData = data
 	resp.DataSourceData = data
 	resp.EphemeralResourceData = data
@@ -310,6 +320,8 @@ func (p *sysutilsProvider) Resources(_ context.Context) []func() resource.Resour
 		NewFileACLResource,
 		NewFileAttributesResource,
 		NewLimitsResource,
+		NewLogrotateResource,
+		NewJournaldConfigResource,
 	}
 }
 
