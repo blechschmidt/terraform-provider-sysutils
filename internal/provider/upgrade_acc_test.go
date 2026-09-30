@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -179,48 +180,84 @@ func upgradeCheckSteps(baseline resource.ExternalProvider, config string, opts u
 // upgradeRegistryWait bounds how long waitForRegistryVersion polls.
 const upgradeRegistryWait = 10 * time.Minute
 
-// waitForRegistryVersion waits until the registry lists version, which is
-// the request "init" makes. For a while after a release, some of the
-// registry's CDN edges still serve the old list of versions, and "init"
-// fails with "no available releases match the given constraints".
+// upgradeRegistryConfirmations is how many requests in a row must see a
+// version before waitForRegistryVersion trusts it. A single request may hit
+// a CDN edge that already has the new version while the next one, made by
+// "init", hits one that doesn't.
+const upgradeRegistryConfirmations = 5
+
+// waitForRegistryVersion waits until the registry lists version and serves
+// its linux download, which are the requests "init" makes. For a while after
+// a release, some of the registry's CDN edges still serve the old list of
+// versions, and "init" fails with "no available releases match the given
+// constraints", so the version must be seen upgradeRegistryConfirmations
+// times in a row.
 func waitForRegistryVersion(t *testing.T, version string) {
 	t.Helper()
-	url := fmt.Sprintf("https://%s/v1/providers/%s/sysutils/versions", upgradeProviderHost, upgradeProviderNamespace)
+	base := fmt.Sprintf("https://%s/v1/providers/%s/sysutils", upgradeProviderHost, upgradeProviderNamespace)
+	versionsURL := base + "/versions"
+	downloadURL := fmt.Sprintf("%s/%s/download/linux/%s", base, version, runtime.GOARCH)
 	client := &http.Client{Timeout: 30 * time.Second}
-	listed := func() (bool, error) {
+	get := func(url string, body any) (int, error) {
 		resp, err := client.Get(url)
 		if err != nil {
-			return false, err
+			return 0, err
 		}
 		defer func() { _ = resp.Body.Close() }()
-		if resp.StatusCode != http.StatusOK {
-			return false, fmt.Errorf("GET %s: %s", url, resp.Status)
+		if resp.StatusCode == http.StatusOK && body != nil {
+			if err := json.NewDecoder(resp.Body).Decode(body); err != nil {
+				return 0, fmt.Errorf("GET %s: %w", url, err)
+			}
 		}
+		return resp.StatusCode, nil
+	}
+	available := func() (string, error) {
 		var body struct {
 			Versions []struct {
 				Version string `json:"version"`
 			} `json:"versions"`
 		}
-		if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
-			return false, fmt.Errorf("GET %s: %w", url, err)
+		status, err := get(versionsURL, &body)
+		if err != nil {
+			return "", err
 		}
+		if status != http.StatusOK {
+			return "", fmt.Errorf("GET %s: %d", versionsURL, status)
+		}
+		listed := false
 		for _, v := range body.Versions {
 			if v.Version == version {
-				return true, nil
+				listed = true
 			}
 		}
-		return false, nil
+		if !listed {
+			return fmt.Sprintf("%s does not list version %s", versionsURL, version), nil
+		}
+		status, err = get(downloadURL, nil)
+		if err != nil {
+			return "", err
+		}
+		if status != http.StatusOK {
+			return fmt.Sprintf("GET %s: %d", downloadURL, status), nil
+		}
+		return "", nil
 	}
 	deadline := time.Now().Add(upgradeRegistryWait)
+	seen := 0
 	for {
-		ok, err := listed()
-		if ok {
-			return
-		}
-		why := fmt.Sprintf("%s does not list version %s", url, version)
+		why, err := available()
 		if err != nil {
 			why = err.Error()
 		}
+		if why == "" {
+			seen++
+			if seen == upgradeRegistryConfirmations {
+				return
+			}
+			time.Sleep(2 * time.Second)
+			continue
+		}
+		seen = 0
 		if time.Now().After(deadline) {
 			t.Fatalf("%s after %s; was it released?", why, upgradeRegistryWait)
 		}
