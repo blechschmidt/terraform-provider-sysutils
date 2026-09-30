@@ -301,6 +301,14 @@ func TestParseNftRuleConflicts(t *testing.T) {
 		"two verdicts":      mk(`{"drop": null}`, `{"accept": null}`),
 		"other chain":       {Chain: "prerouting", Comment: "tf-sysutils:c", Expr: []json.RawMessage{json.RawMessage(`{"drop": null}`)}},
 		"jump":              mk(`{"jump": {"target": "x"}}`),
+		// A second match of a field narrows the rule; parsing only the
+		// last would read it as the configured rule.
+		"two port matches": mk(tcp, `{"match": {"op": "==", "left": {"payload": {"protocol": "tcp", "field": "dport"}}, "right": 80}}`,
+			`{"match": {"op": "==", "left": {"payload": {"protocol": "tcp", "field": "dport"}}, "right": 22}}`, `{"accept": null}`),
+		"two addresses": mk(ip4, `{"match": {"op": "==", "left": {"payload": {"protocol": "ip", "field": "saddr"}}, "right": "10.0.0.2"}}`, `{"accept": null}`),
+		"two interfaces": mk(`{"match": {"op": "==", "left": {"meta": {"key": "iifname"}}, "right": "eth0"}}`,
+			`{"match": {"op": "==", "left": {"meta": {"key": "iifname"}}, "right": "eth1"}}`, `{"accept": null}`),
+		"two families": mk(`{"match": {"op": "==", "left": {"meta": {"key": "nfproto"}}, "right": "ipv4"}}`, nfv6, `{"accept": null}`),
 	} {
 		if _, err := parseNftRule(lr); err == nil {
 			t.Errorf("%s: parsed", name)
@@ -364,6 +372,10 @@ func TestParseIptablesRules(t *testing.T) {
 		{firewallFamilyIPv4, `-A INPUT -m comment --comment "tf-sysutils:n"`},
 		{firewallFamilyIPv4, `-A INPUT -m comment --comment "tf-sysutils:n" -j DROP -i`},
 		{firewallFamilyIPv6, `-A INPUT -s 10.0.0.0/8 -m comment --comment "tf-sysutils:n" -j DROP`},
+		// Repeated options narrow the rule; only the last would be parsed.
+		{firewallFamilyIPv4, `-A INPUT -p tcp -m multiport --dports 22 -m multiport --dports 80 -m comment --comment "tf-sysutils:n" -j ACCEPT`},
+		{firewallFamilyIPv4, `-A INPUT -p tcp -m tcp --dport 22 -m multiport --dports 80 -m comment --comment "tf-sysutils:n" -j ACCEPT`},
+		{firewallFamilyIPv4, `-A INPUT -m comment --comment "tf-sysutils:n" -m comment --comment "tf-sysutils:n" -j ACCEPT`},
 	} {
 		if _, err := parse(bad.family, bad.line); err == nil {
 			t.Errorf("%q: parsed", bad.line)

@@ -77,7 +77,7 @@ func (r *swapResource) Schema(_ context.Context, _ resource.SchemaRequest, resp 
 			"path": schema.StringAttribute{
 				Required: true,
 				MarkdownDescription: "Absolute path of the swap file, or of an existing block device if it starts with `/dev/`, such as `\"/dev/sdb2\"` or `\"/dev/disk/by-uuid/...\"`. " +
-					"The parent directory of a swap file must exist, and the file itself must not be a symlink. " +
+					"The parent directory of a swap file must exist, and it and every directory above it must belong to root and not be writable by other users (sticky directories such as `/tmp` excepted); the file itself must not be a symlink. " +
 					"Must be in canonical form (no `.`/`..` segments, duplicate or trailing slashes). Changing this forces a new resource.",
 				PlanModifiers: []planmodifier.String{stringplanmodifier.RequiresReplace()},
 				Validators:    []validator.String{absolutePath()},
@@ -114,7 +114,11 @@ func (r *swapResource) Schema(_ context.Context, _ resource.SchemaRequest, resp 
 				Computed: true,
 				Default:  booldefault.StaticBool(false),
 				MarkdownDescription: "Allow overwriting data. Without it, the provider refuses to run `mkswap` on a block device that holds a file system, volume or partition table signature, " +
-					"and refuses to format, resize or replace an existing file it did not create. Swap areas that are already formatted are used as they are either way. Defaults to `false`.",
+					"to enable a block device whose swap header shares it with such a signature, " +
+					"and to format, resize or replace an existing file it did not create. " +
+					"An existing swap file that other users may have opened, because it belongs to one of them or its mode grants group or other users access, is never enabled as it is: " +
+					"with `force`, or if the provider created it, it is replaced by a new file. " +
+					"Other swap areas that are already formatted are used as they are either way. Defaults to `false`.",
 			},
 			"uuid": schema.StringAttribute{
 				Computed:            true,
@@ -544,8 +548,28 @@ func (r *swapResource) prepareDevice(ctx context.Context, host, p string, force,
 	}
 	resolved := swapName(host, true)
 	hdr, err := readSwapHeader(resolved)
-	if err != nil || hdr != nil {
-		return hdr, err
+	if err != nil {
+		return nil, err
+	}
+	m := r.cfg.mgr()
+	if hdr != nil {
+		if active || force {
+			return hdr, nil
+		}
+		// A file system or volume created over an old swap area without
+		// wiping it can leave the swap header intact; swapon would then
+		// overwrite its data.
+		if err := checkBlockDeviceUnused(resolved); err != nil {
+			return nil, err
+		}
+		sig, err := m.probe(ctx, resolved, true)
+		if err != nil {
+			return nil, fmt.Errorf("checking %q for other data: %w", p, err)
+		}
+		if sig != "" && sig != "swap" {
+			return nil, fmt.Errorf("%q holds a swap header, but also a %s signature, whose data swapon would overwrite; set force = true to use it as swap anyway", p, sig)
+		}
+		return hdr, nil
 	}
 	if active {
 		return nil, fmt.Errorf("%q is an active swap area, but its swap header cannot be read", p)
@@ -553,7 +577,6 @@ func (r *swapResource) prepareDevice(ctx context.Context, host, p string, force,
 	if err := checkBlockDeviceUnused(resolved); err != nil {
 		return nil, err
 	}
-	m := r.cfg.mgr()
 	sig, err := m.probe(ctx, resolved, true)
 	if err != nil {
 		return nil, fmt.Errorf("checking %q for existing data: %w", p, err)
@@ -596,15 +619,25 @@ func (r *swapResource) prepareFile(ctx context.Context, plan, prev *swapModel, h
 	if !info.Mode().IsRegular() {
 		return nil, fmt.Errorf("%q exists and is not a regular file", p)
 	}
+	// swapon follows the path, like mkswap in allocateSwapFile.
+	if err := checkSwapFileDir(filepath.Dir(host)); err != nil {
+		return nil, err
+	}
 	hdr, err := readSwapHeader(host)
 	if err != nil {
 		return nil, err
 	}
-	if hdr != nil && hdr.bytes == want && info.Size() == want {
+	exposed := swapFileExposure(info)
+	if hdr != nil && hdr.bytes == want && info.Size() == want && exposed == "" {
 		return hdr, secureSwapFile(host, info)
 	}
 
 	owned := prev != nil && prev.Created.ValueBool()
+	if !owned && !plan.Force.ValueBool() && exposed != "" && hdr != nil && hdr.bytes == want && info.Size() == want {
+		return nil, fmt.Errorf("%q %s, who may hold it open and so read or modify swapped-out memory even after its "+
+			"permissions are fixed. The provider did not create it, so it will not replace it; set force = true to replace it with a new swap file, "+
+			"or recreate it yourself with mode 0600", p, exposed)
+	}
 	if !owned && !plan.Force.ValueBool() {
 		what := "holds no swap area"
 		if hdr != nil {
@@ -626,6 +659,22 @@ func (r *swapResource) prepareFile(ctx context.Context, plan, prev *swapModel, h
 	}
 	*changed = true
 	return readSwapHeader(host)
+}
+
+// swapFileExposure describes why other users than root and the provider's
+// user may have opened the existing file described by info: it belongs to
+// one of them, or its mode grants group or other users access. It returns
+// "" if neither is the case. Changing ownership or mode does not revoke a
+// descriptor opened before, through which swapped-out memory could be read
+// or, worse, modified; such a file is only fit to be replaced.
+func swapFileExposure(info fs.FileInfo) string {
+	if st, ok := info.Sys().(*syscall.Stat_t); ok && st.Uid != 0 && int(st.Uid) != os.Geteuid() {
+		return fmt.Sprintf("belongs to user %d", st.Uid)
+	}
+	if perm := info.Mode().Perm(); perm&0o077 != 0 {
+		return fmt.Sprintf("has mode %04o, which lets other users open it", perm)
+	}
+	return ""
 }
 
 // secureSwapFile makes the existing swap file at host readable and writable
@@ -719,7 +768,10 @@ func (r *swapResource) refresh(m *swapModel) diag.Diagnostics {
 	m.ID = types.StringValue(p)
 	m.Enabled = types.BoolValue(live != nil)
 	m.Persist = types.BoolValue(entry != nil)
-	if hdr != nil {
+	// A swap file that other users may hold open is replaced by the next
+	// apply (see swapFileExposure), which gives it a new UUID; reading it
+	// as having none makes the plan show that.
+	if hdr != nil && (device || swapFileExposure(info) == "") {
 		m.UUID = types.StringValue(hdr.uuid)
 	} else {
 		m.UUID = types.StringValue("")

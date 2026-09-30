@@ -116,6 +116,10 @@ type firewallFound struct {
 	// otherRules counts the rules in the provider's nftables table that
 	// belong to other resources or were added by hand.
 	otherRules int
+	// otherObjects counts the other objects in that table that the
+	// provider did not create, such as sets or chains added by hand (see
+	// nftForeignObjects).
+	otherObjects int
 }
 
 // foundRule is a rule found by its tag.
@@ -234,6 +238,9 @@ func (b *nftablesBackend) find(ctx context.Context, name string) (*firewallFound
 	if err != nil {
 		return nil, err
 	}
+	if found.otherObjects, err = nftForeignObjects([]byte(out)); err != nil {
+		return nil, err
+	}
 	for _, lr := range listing.rules() {
 		if n, _, ok := parseFirewallTag(lr.Comment); !ok || n != name {
 			found.otherRules++
@@ -298,7 +305,7 @@ func (b *nftablesBackend) remove(ctx context.Context, found *firewallFound) erro
 		return nil
 	}
 	var script []string
-	if found.otherRules == 0 {
+	if found.otherRules == 0 && found.otherObjects == 0 {
 		// The table holds nothing else: remove it, and its chains, as well.
 		script = []string{"delete table inet " + nftTable}
 	} else {

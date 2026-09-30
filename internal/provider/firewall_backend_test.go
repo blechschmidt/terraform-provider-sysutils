@@ -171,3 +171,41 @@ func TestFirewallDetect(t *testing.T) {
 type fakeNotFound struct{ name string }
 
 func (e *fakeNotFound) Error() string { return e.name + ": not found" }
+
+// TestNftablesRemoveKeepsForeignObjects checks that removing the last rule
+// deletes the provider's table only if it holds nothing the provider did
+// not create: sets, other chains and changed base chains survive.
+func TestNftablesRemoveKeepsForeignObjects(t *testing.T) {
+	ctx := context.Background()
+	const table = `{"table": {"family": "inet", "name": "terraform_sysutils", "handle": 2}}`
+	const chain = `{"chain": {"family": "inet", "table": "terraform_sysutils", "name": "input", "handle": 1, "type": "filter", "hook": "input", "prio": 0, "policy": "accept"}}`
+	const rule = `{"rule": {"family": "inet", "table": "terraform_sysutils", "chain": "input", "handle": 3, "comment": "tf-sysutils:r", "expr": [{"accept": null}]}}`
+	for _, tc := range []struct {
+		name, extra, want string
+	}{
+		{"only the rule", "", "delete table inet terraform_sysutils\n"},
+		{"set added by hand", `, {"set": {"family": "inet", "name": "blocked", "table": "terraform_sysutils", "type": "ipv4_addr", "handle": 4}}`,
+			"delete rule inet terraform_sysutils input handle 3\n"},
+		{"chain added by hand", `, {"chain": {"family": "inet", "table": "terraform_sysutils", "name": "mine", "handle": 5}}`,
+			"delete rule inet terraform_sysutils input handle 3\n"},
+		{"policy changed by hand", `, {"chain": {"family": "inet", "table": "terraform_sysutils", "name": "forward", "handle": 6, "type": "filter", "hook": "forward", "prio": 0, "policy": "drop"}}`,
+			"delete rule inet terraform_sysutils input handle 3\n"},
+	} {
+		f := &fakeFirewall{results: map[string]fakeResult{
+			"nft -j list tables":                        {stdout: `{"nftables": [` + table + `]}`},
+			"nft -j list table inet terraform_sysutils": {stdout: `{"nftables": [{"metainfo": {}}, ` + table + `, ` + chain + `, ` + rule + tc.extra + `]}`},
+		}}
+		b := &nftablesBackend{run: f.run}
+		found, err := b.find(ctx, "r")
+		if err != nil || len(found.rules) != 1 {
+			t.Fatalf("%s: find: %+v, %v", tc.name, found, err)
+		}
+		f.stdin = nil
+		if err := b.remove(ctx, found); err != nil {
+			t.Fatalf("%s: remove: %v", tc.name, err)
+		}
+		if len(f.stdin) != 1 || f.stdin[0] != tc.want {
+			t.Errorf("%s: script %q, want %q", tc.name, f.stdin, tc.want)
+		}
+	}
+}

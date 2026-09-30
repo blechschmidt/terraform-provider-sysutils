@@ -10,6 +10,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 
 	"github.com/hashicorp/terraform-plugin-framework/providerserver"
@@ -481,8 +482,9 @@ func TestSwapResource_adoptExistingSwapFile(t *testing.T) {
 	if err := allocateSwapFile(context.Background(), f, env.swapfile, 2*mib, false); err != nil {
 		t.Fatal(err)
 	}
-	// Adopted files get the permissions swapon recommends.
-	if err := os.Chmod(env.swapfile, 0o644); err != nil {
+	// Adopted files get the ownership swapon recommends; the mode is fixed
+	// as long as it grants no access to others.
+	if err := os.Chmod(env.swapfile, 0o400); err != nil {
 		t.Fatal(err)
 	}
 	f.calls = nil
@@ -515,6 +517,136 @@ func TestSwapResource_adoptExistingSwapFile(t *testing.T) {
 			},
 		},
 	})
+}
+
+// inode returns the inode number of p.
+func inode(t *testing.T, p string) uint64 {
+	t.Helper()
+	info, err := os.Lstat(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return info.Sys().(*syscall.Stat_t).Ino
+}
+
+// TestSwapResource_exposedExistingFile checks that an existing swap file
+// that other users could have opened is never enabled as it is: they may
+// hold a descriptor through which they read or modify swapped-out memory,
+// and chmod does not revoke it. Only force replaces it with a new file.
+func TestSwapResource_exposedExistingFile(t *testing.T) {
+	env := newSwapTestEnv(t)
+	f := &fakeSwapManager{}
+	if err := allocateSwapFile(context.Background(), f, env.swapfile, 2*mib, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(env.swapfile, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	orig := inode(t, env.swapfile)
+
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: swapProviderFactories(env.fstab, f),
+		Steps: []resource.TestStep{
+			{
+				Config:      swapHCL(env.swapfile, "size_mib = 2"),
+				ExpectError: regexp.MustCompile(`has\s+mode\s+0644[\s\S]*read\s+or\s+modify\s+swapped-out\s+memory[\s\S]*force\s+=\s+true`),
+			},
+			{
+				Config: swapHCL(env.swapfile, "size_mib = 2\nforce = true"),
+				PreConfig: func() {
+					if f.entry(env.swapfile) != nil {
+						t.Fatal("the exposed file was enabled")
+					}
+					if info, err := os.Lstat(env.swapfile); err != nil || info.Mode().Perm() != 0o644 {
+						t.Fatalf("the refused file was changed: %v, %v", info, err)
+					}
+				},
+				Check: resource.ComposeTestCheckFunc(
+					checkSwapFile(env.swapfile, 2*mib),
+					checkFakeSwap(f, env.swapfile, true, nil),
+					func(*terraform.State) error {
+						if inode(t, env.swapfile) == orig {
+							return errors.New("the exposed file was enabled instead of being replaced")
+						}
+						return nil
+					},
+				),
+			},
+		},
+	})
+}
+
+// TestSwapResource_ownedFileExposed checks that a swap file the provider
+// created and that was later opened up to other users is replaced, with
+// the new UUID planned rather than reported as an inconsistent result.
+func TestSwapResource_ownedFileExposed(t *testing.T) {
+	env := newSwapTestEnv(t)
+	f := &fakeSwapManager{}
+	var orig uint64
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: swapProviderFactories(env.fstab, f),
+		CheckDestroy:             checkSwapFile(env.swapfile, 0),
+		Steps: []resource.TestStep{
+			{
+				Config: swapHCL(env.swapfile, "size_mib = 2"),
+				Check: func(*terraform.State) error {
+					orig = inode(t, env.swapfile)
+					return nil
+				},
+			},
+			{
+				PreConfig: func() {
+					if err := os.Chmod(env.swapfile, 0o666); err != nil {
+						t.Fatal(err)
+					}
+				},
+				Config: swapHCL(env.swapfile, "size_mib = 2"),
+				ConfigPlanChecks: resource.ConfigPlanChecks{
+					PreApply: []plancheck.PlanCheck{plancheck.ExpectResourceAction(testSwapResource, plancheck.ResourceActionUpdate)},
+				},
+				Check: resource.ComposeTestCheckFunc(
+					checkSwapFile(env.swapfile, 2*mib),
+					checkFakeSwap(f, env.swapfile, true, nil),
+					resource.TestCheckResourceAttr(testSwapResource, "created", "true"),
+					func(*terraform.State) error {
+						if inode(t, env.swapfile) == orig {
+							return errors.New("the exposed file was kept")
+						}
+						return nil
+					},
+				),
+			},
+		},
+	})
+}
+
+// TestSwapResource_foreignOwnedFile checks that a swap file of another
+// user is not adopted by chowning it.
+func TestSwapResource_foreignOwnedFile(t *testing.T) {
+	requireRoot(t)
+	env := newSwapTestEnv(t)
+	f := &fakeSwapManager{}
+	if err := allocateSwapFile(context.Background(), f, env.swapfile, 2*mib, false); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chown(env.swapfile, 65534, 65534); err != nil {
+		t.Fatal(err)
+	}
+	resource.UnitTest(t, resource.TestCase{
+		ProtoV6ProviderFactories: swapProviderFactories(env.fstab, f),
+		Steps: []resource.TestStep{
+			{
+				Config:      swapHCL(env.swapfile, "size_mib = 2"),
+				ExpectError: regexp.MustCompile(`belongs\s+to\s+user\s+65534`),
+			},
+		},
+	})
+	if f.entry(env.swapfile) != nil {
+		t.Error("the file of another user was enabled")
+	}
+	if info, err := os.Lstat(env.swapfile); err != nil || info.Sys().(*syscall.Stat_t).Uid != 65534 {
+		t.Errorf("the file of another user was changed: %v", err)
+	}
 }
 
 func TestSwapResource_refusesTakeover(t *testing.T) {

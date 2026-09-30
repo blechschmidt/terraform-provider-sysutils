@@ -104,7 +104,7 @@ resource "sysutils_firewall_rule" "icmpv6" {
 
 ### nftables
 
-The provider keeps its rules in a table of its own, `inet terraform_sysutils`, so that they can't be confused with rules of other tools and one table holds IPv4 and IPv6 rules. The table and its `input`, `output` and `forward` base chains are created as needed, as `type filter hook <chain> priority 0; policy accept;`. When the last rule of the table is destroyed, the table is deleted as well.
+The provider keeps its rules in a table of its own, `inet terraform_sysutils`, so that they can't be confused with rules of other tools and one table holds IPv4 and IPv6 rules. The table and its `input`, `output` and `forward` base chains are created as needed, as `type filter hook <chain> priority 0; policy accept;`. When the last rule of the table is destroyed, the table is deleted as well, unless it holds anything the provider did not create, such as a set or chain added by hand or a base chain whose policy was changed; then only the rule is deleted.
 
 Every change is one nft script, which nft applies as a single transaction: the rule is replaced in place, keeping its position, or not at all.
 

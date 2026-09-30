@@ -428,9 +428,15 @@ func (r *firewallRuleResource) Create(ctx context.Context, req resource.CreateRe
 	if err != nil {
 		resp.Diagnostics.AddError("Adding firewall rule", capitalize(err.Error())+".")
 		// Record a partly added rule, so that it is tainted and destroy
-		// removes what was added.
+		// removes what was added. A command that timed out or was killed
+		// may have added the rule without reporting it, so look again;
+		// if that is not possible either, record the resource anyway: a
+		// rule that turns out to be missing is merely created again,
+		// while an unrecorded one would block every later create.
 		if !changed {
-			return
+			if f, ferr := b.find(ctx, want.name); ferr == nil && f.empty() {
+				return
+			}
 		}
 	}
 	resp.Diagnostics.Append(resp.State.Set(ctx, &plan)...)

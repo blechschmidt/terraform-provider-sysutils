@@ -448,6 +448,43 @@ func parseNftListing(data []byte) (*nftListing, error) {
 	return &l, nil
 }
 
+// nftForeignObjects counts the objects in the listing of the provider's
+// table, data, that the provider does not create itself: anything but the
+// table, its rules and the base chains exactly as nftChainDecl declares
+// them, such as sets, maps, other chains, or a base chain whose policy was
+// changed. Deleting the table would delete them too.
+func nftForeignObjects(data []byte) (int, error) {
+	var l struct {
+		Nftables []map[string]json.RawMessage `json:"nftables"`
+	}
+	if err := json.Unmarshal(data, &l); err != nil {
+		return 0, fmt.Errorf("parsing the JSON output of nft: %w", err)
+	}
+	n := 0
+	for _, o := range l.Nftables {
+		for key, val := range o {
+			switch key {
+			case "metainfo", "table", "rule":
+				continue
+			case "chain":
+				var c struct {
+					Name   string `json:"name"`
+					Type   string `json:"type"`
+					Hook   string `json:"hook"`
+					Prio   *int   `json:"prio"`
+					Policy string `json:"policy"`
+				}
+				if json.Unmarshal(val, &c) == nil && slices.Contains(firewallChains, c.Name) &&
+					c.Type == "filter" && c.Hook == c.Name && c.Prio != nil && *c.Prio == 0 && c.Policy == "accept" {
+					continue
+				}
+			}
+			n++
+		}
+	}
+	return n, nil
+}
+
 // hasNftTable reports whether the listing of "nft -j list tables" includes
 // the provider's table.
 func (l *nftListing) hasNftTable() bool {
@@ -500,6 +537,17 @@ func parseNftRule(lr nftListedRule) (firewallRule, error) {
 		r.protocol = p
 		return nil
 	}
+	// once rejects a second match of the same field: the rule would
+	// require both, which the attributes cannot express, and parsing only
+	// the last would misread the rule as the configured one.
+	seen := map[string]bool{}
+	once := func(field string) error {
+		if seen[field] {
+			return fmt.Errorf("the rule matches %s more than once", field)
+		}
+		seen[field] = true
+		return nil
+	}
 	verdicts := 0
 	for _, raw := range lr.Expr {
 		var e map[string]json.RawMessage
@@ -549,6 +597,12 @@ func parseNftRule(lr nftListedRule) (firewallRule, error) {
 			}
 			switch {
 			case left.Meta != nil:
+				// Repeated protocol matches are checked by setProto.
+				if left.Meta.Key != "l4proto" {
+					if err := once(left.Meta.Key); err != nil {
+						return r, err
+					}
+				}
 				var s string
 				switch left.Meta.Key {
 				case "nfproto":
@@ -583,6 +637,9 @@ func parseNftRule(lr nftListedRule) (firewallRule, error) {
 				}
 			case left.Payload != nil:
 				proto, field := left.Payload.Protocol, left.Payload.Field
+				if err := once(field); err != nil {
+					return r, err
+				}
 				switch {
 				case (proto == "ip" || proto == "ip6") && (field == "saddr" || field == "daddr"):
 					p, err := nftPrefix(m.Right)
@@ -861,10 +918,27 @@ func parseIptablesRule(family string, words []string) (firewallRule, error) {
 		return words[i+1], nil
 	}
 	tagged := false
+	// seen rejects a second occurrence of an option, such as a second
+	// multiport match: iptables requires both, but only the last would be
+	// parsed.
+	seen := map[string]bool{}
 	for i := 2; i < len(words); i += 2 {
 		v, err := arg(i)
 		if err != nil {
 			return r, err
+		}
+		opt := words[i]
+		switch opt {
+		case "--sports", "--sport", "--source-ports":
+			opt = "--sports"
+		case "--dports", "--dport", "--destination-ports":
+			opt = "--dports"
+		}
+		if opt != "-m" {
+			if seen[opt] {
+				return r, fmt.Errorf("the rule has option %s more than once", words[i])
+			}
+			seen[opt] = true
 		}
 		switch words[i] {
 		case "-s", "-d":

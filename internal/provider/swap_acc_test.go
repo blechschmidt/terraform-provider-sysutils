@@ -281,6 +281,50 @@ func TestAccSwap_blockDevice(t *testing.T) {
 	})
 }
 
+// TestAccSwap_swapHeaderUnderOtherData checks that a device whose old swap
+// header survived another format, here LUKS written without wiping it, is
+// not enabled as swap without force: swapon would overwrite the data.
+func TestAccSwap_swapHeaderUnderOtherData(t *testing.T) {
+	env := newSwapAccEnv(t)
+	dev := newLoopDevice(t, env.dir, 8*mib)
+	if err := realSwapManager().mkswap(context.Background(), dev, false); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.OpenFile(dev, os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.WriteAt([]byte("LUKS\xba\xbe"), 0); err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if h, err := readSwapHeader(dev); err != nil || h == nil {
+		t.Fatalf("the swap header did not survive: %+v, %v", h, err)
+	}
+
+	resource.Test(t, resource.TestCase{
+		ProtoV6ProviderFactories: swapProviderFactories(env.fstab, nil),
+		CheckDestroy:             checkRealSwap(t, dev, 0, nil),
+		Steps: []resource.TestStep{
+			{
+				Config:      swapHCL(dev, "persist = false"),
+				ExpectError: regexp.MustCompile(`holds\s+a\s+swap\s+header,\s+but\s+also\s+a\s+LUKS\s+signature[\s\S]*force\s+=\s+true`),
+			},
+			{
+				PreConfig: func() {
+					if realSwap(t, dev) != nil {
+						t.Fatal("the device was enabled although it was refused")
+					}
+				},
+				Config: swapHCL(dev, "persist = false\nforce = true"),
+				Check:  checkRealSwap(t, dev, 8, nil),
+			},
+		},
+	})
+}
+
 func TestAccSwap_blankBlockDevice(t *testing.T) {
 	env := newSwapAccEnv(t)
 	dev := newLoopDevice(t, env.dir, 8*mib)

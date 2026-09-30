@@ -190,6 +190,8 @@ func TestProbeSignatures(t *testing.T) {
 		{"lvm", at(512, "LABELONE"), "LVM2 physical volume"},
 		{"gpt", at(512, "EFI PART"), "GPT partition table"},
 		{"mbr", at(510, "\x55\xaa"), "DOS boot sector or partition table"},
+		// Data written over an old swap area is not taken for swap.
+		{"luks over swap", append(at(0, "LUKS\xba\xbe")[:4096-10], append([]byte("SWAPSPACE2"), make([]byte, swapProbeSize-4096)...)...), "LUKS"},
 		// A magic cut off by the end of the data does not count.
 		{"truncated", at(1080, "\x53\xef")[:1081], ""},
 	} {
@@ -431,5 +433,89 @@ func TestCheckSwapFileDir(t *testing.T) {
 		if err := checkSwapFileDir(other); err == nil || !strings.Contains(err.Error(), "belongs to user") {
 			t.Errorf("directory owned by another user: err = %v", err)
 		}
+	}
+}
+
+// TestCheckSwapFileDir_ancestors checks that the directories above the
+// swap file's directory, and those reached through symlinks, are checked as
+// well: whoever controls any of them can redirect mkswap and swapon.
+func TestCheckSwapFileDir_ancestors(t *testing.T) {
+	requireRoot(t)
+	dir, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	mkdir := func(p string, uid int, mode fs.FileMode) string {
+		t.Helper()
+		if err := os.Mkdir(p, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chown(p, uid, uid); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(p, mode); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	// A root-owned directory inside another user's directory: that user
+	// can rename it away and put a symlink in its place.
+	home := mkdir(filepath.Join(dir, "home"), 65534, 0o755)
+	inHome := mkdir(filepath.Join(home, "swap"), 0, 0o755)
+	if err := checkSwapFileDir(inHome); err == nil || !strings.Contains(err.Error(), "belongs to user 65534") {
+		t.Errorf("directory below another user's directory: err = %v", err)
+	}
+	// Likewise below a world-writable directory without the sticky bit.
+	open := mkdir(filepath.Join(dir, "open"), 0, 0o777)
+	if err := checkSwapFileDir(mkdir(filepath.Join(open, "swap"), 0, 0o755)); err == nil || !strings.Contains(err.Error(), "writable by other users") {
+		t.Errorf("directory below a world-writable directory: err = %v", err)
+	}
+	// In a sticky directory, other users' entries are under their control.
+	sticky := mkdir(filepath.Join(dir, "sticky"), 0, 0o777|fs.ModeSticky)
+	theirs := mkdir(filepath.Join(sticky, "theirs"), 65534, 0o755)
+	if err := checkSwapFileDir(theirs); err == nil {
+		t.Error("another user's directory in a sticky directory accepted")
+	}
+	if err := checkSwapFileDir(mkdir(filepath.Join(sticky, "ours"), 0, 0o755)); err != nil {
+		t.Errorf("own directory in a sticky directory: %v", err)
+	}
+	// A symlink is followed: its target's directories count, and a
+	// symlink another user may replace does not do.
+	safe := mkdir(filepath.Join(dir, "safe"), 0, 0o755)
+	if err := os.Symlink(inHome, filepath.Join(safe, "link")); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkSwapFileDir(filepath.Join(safe, "link")); err == nil {
+		t.Error("symlink to a directory below another user's directory accepted")
+	}
+	if err := os.Symlink("../safe", filepath.Join(safe, "rel")); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkSwapFileDir(filepath.Join(safe, "rel")); err != nil {
+		t.Errorf("relative symlink between safe directories: %v", err)
+	}
+	link := filepath.Join(sticky, "theirlink")
+	if err := os.Symlink(safe, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Lchown(link, 65534, 65534); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkSwapFileDir(link); err == nil {
+		t.Error("another user's symlink in a sticky directory accepted")
+	}
+	loop := filepath.Join(safe, "loop")
+	if err := os.Symlink("loop", loop); err != nil {
+		t.Fatal(err)
+	}
+	if err := checkSwapFileDir(loop); err == nil {
+		t.Error("symlink loop accepted")
+	}
+	// allocateSwapFile refuses such a directory before creating anything.
+	if err := allocateSwapFile(context.Background(), &headerOnlyManager{}, filepath.Join(inHome, "swapfile"), mib, false); err == nil {
+		t.Error("allocateSwapFile below another user's directory succeeded")
+	}
+	if entries, _ := os.ReadDir(inHome); len(entries) != 0 {
+		t.Errorf("left %d entries behind", len(entries))
 	}
 }

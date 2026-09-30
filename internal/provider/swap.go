@@ -206,19 +206,21 @@ var knownSignatures = []signatureMagic{
 
 // probeSignatures looks for known signatures in the first swapProbeSize
 // bytes of data. It returns the name of the first one found, "swap" for a
-// swap area, or "" if there is none.
+// swap area without any other signature, or "" if there is none. Other
+// signatures take precedence over a swap header, so that data written over
+// an old swap area, without wiping it, is not taken for swap.
 func probeSignatures(data []byte) string {
+	for _, s := range knownSignatures {
+		if len(data) >= s.offset+len(s.magic) && string(data[s.offset:s.offset+len(s.magic)]) == s.magic {
+			return s.name
+		}
+	}
 	for _, ps := range []int{4096, 8192, 16384, 65536} {
 		if len(data) >= ps {
 			m := string(data[ps-len(swapHeaderMagic) : ps])
 			if m == swapHeaderMagic || m == swapHeaderLegacyMagic {
 				return "swap"
 			}
-		}
-	}
-	for _, s := range knownSignatures {
-		if len(data) >= s.offset+len(s.magic) && string(data[s.offset:s.offset+len(s.magic)]) == s.magic {
-			return s.name
 		}
 	}
 	return ""
@@ -365,9 +367,12 @@ func (m systemSwapManager) probe(ctx context.Context, p string, device bool) (st
 	if err != nil {
 		return "", err
 	}
-	if sig := probeSignatures(data); sig != "" {
-		return sig, nil
+	builtin := probeSignatures(data)
+	if builtin != "" && builtin != "swap" {
+		return builtin, nil
 	}
+	// blkid also reports a swap area that holds another signature as
+	// ambivalent.
 	res, err := m.run(ctx, execSpec{
 		Argv:           []string{"blkid", "-p", "-o", "export", "--", p},
 		Env:            append(os.Environ(), "LC_ALL=C"),
@@ -376,7 +381,7 @@ func (m systemSwapManager) probe(ctx context.Context, p string, device bool) (st
 	})
 	switch {
 	case errors.Is(err, exec.ErrNotFound):
-		return "", nil // Without blkid, the built-in checks have to do.
+		return builtin, nil // Without blkid, the built-in checks have to do.
 	case err != nil:
 		return "", fmt.Errorf("blkid: %w", err)
 	case res.TimedOut:
@@ -389,7 +394,7 @@ func (m systemSwapManager) probe(ctx context.Context, p string, device bool) (st
 		}
 		return "unknown signature", nil
 	case 2:
-		return "", nil // Nothing found.
+		return builtin, nil // Nothing found.
 	case 8:
 		return "several conflicting signatures", nil
 	default:
@@ -465,29 +470,92 @@ func allocateSwapFile(ctx context.Context, m swapManager, p string, size int64, 
 	return nil
 }
 
-// checkSwapFileDir checks that the directory for a new swap file exists and
-// that nobody but its owner, root or the provider's user can replace entries
-// in it. mkswap(8) and swapon(8) follow symlinks, so in a directory where
-// another user could replace the temporary file with a symlink, mkswap
-// could be made to overwrite any file.
+// checkSwapFileDir checks that the directory for a swap file exists and
+// that nobody but root or the provider's user can change what its path
+// resolves to. mkswap(8) and swapon(8) take a path and follow symlinks, so
+// if another user could replace the file, the directory or any directory
+// above it (or a symlink on the way) with a symlink, mkswap could be made to
+// overwrite any file or device, and swapon to swap to it. Every directory
+// that resolving dir passes through, including the targets of symlinks,
+// must therefore belong to root or the provider's user and not be writable
+// by others, unless it is sticky like /tmp; in a sticky directory the next
+// entry must belong to root or the provider's user as well.
 func checkSwapFileDir(dir string) error {
-	info, err := os.Stat(dir)
-	if err != nil {
-		return fmt.Errorf("directory for swap file: %w", err)
-	}
-	if !info.IsDir() {
-		return fmt.Errorf("%q is not a directory", dir)
-	}
-	st, ok := info.Sys().(*syscall.Stat_t)
-	if !ok {
-		return nil
-	}
 	euid := uint32(os.Geteuid()) //nolint:gosec // UIDs fit in 32 bits.
-	if st.Uid != 0 && st.Uid != euid {
-		return fmt.Errorf("directory %q belongs to user %d; swap files must be in a directory owned by root", dir, st.Uid)
+	trusted := func(st *syscall.Stat_t) bool { return st.Uid == 0 || st.Uid == euid }
+	// check checks the directory at p and reports whether it is sticky and
+	// writable by others.
+	check := func(p string) (bool, error) {
+		info, err := os.Stat(p)
+		if err != nil {
+			return false, fmt.Errorf("directory for swap file: %w", err)
+		}
+		if !info.IsDir() {
+			return false, fmt.Errorf("%q is not a directory", p)
+		}
+		st, ok := info.Sys().(*syscall.Stat_t)
+		if !ok {
+			return false, nil
+		}
+		if !trusted(st) {
+			return false, fmt.Errorf("directory %q belongs to user %d; swap files must be in a directory owned by root", p, st.Uid)
+		}
+		open := info.Mode()&0o022 != 0
+		if open && info.Mode()&fs.ModeSticky == 0 {
+			return false, fmt.Errorf("directory %q is writable by other users; swap files must be in a directory only root can write to", p)
+		}
+		return open, nil
 	}
-	if info.Mode()&0o022 != 0 && info.Mode()&fs.ModeSticky == 0 {
-		return fmt.Errorf("directory %q is writable by other users; swap files must be in a directory only root can write to", dir)
+
+	pending := strings.Split(filepath.Clean(dir), "/")
+	cur := "/"
+	sticky, err := check(cur)
+	if err != nil {
+		return err
+	}
+	for links := 0; len(pending) > 0; {
+		name := pending[0]
+		pending = pending[1:]
+		switch name {
+		case "", ".":
+			continue
+		case "..":
+			// cur has no symlinks, so its parent is the lexical one.
+			cur = filepath.Dir(cur)
+			if sticky, err = check(cur); err != nil {
+				return err
+			}
+			continue
+		}
+		next := filepath.Join(cur, name)
+		info, err := os.Lstat(next)
+		if err != nil {
+			return fmt.Errorf("directory for swap file: %w", err)
+		}
+		if st, ok := info.Sys().(*syscall.Stat_t); ok && sticky && !trusted(st) {
+			return fmt.Errorf("%q belongs to user %d, who can replace it in the sticky directory %q", next, st.Uid, cur)
+		}
+		if info.Mode()&fs.ModeSymlink != 0 {
+			if links++; links > 40 {
+				return fmt.Errorf("directory for swap file %q: too many levels of symbolic links", dir)
+			}
+			target, err := os.Readlink(next)
+			if err != nil {
+				return fmt.Errorf("directory for swap file: %w", err)
+			}
+			if filepath.IsAbs(target) {
+				cur = "/"
+				if sticky, err = check(cur); err != nil {
+					return err
+				}
+			}
+			pending = append(strings.Split(target, "/"), pending...)
+			continue
+		}
+		if sticky, err = check(next); err != nil {
+			return err
+		}
+		cur = next
 	}
 	return nil
 }
