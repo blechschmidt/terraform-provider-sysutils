@@ -4,6 +4,14 @@ All notable changes to this provider are listed here. Versions follow [semantic 
 
 ## Unreleased
 
+## 1.3.0 (2026-09-30)
+
+Provider-defined functions, two account list data sources and a write-only `content_wo` for `sysutils_file`. The resources and data sources of v1.2.1 are otherwise unchanged.
+
+### Upgrading from v1.2.x
+
+State written by v1.2.0 and v1.2.1 keeps working: `sysutils_file` gains the optional `content_wo` and `content_wo_version` attributes and no other schema changed, so after upgrading, the first `terraform plan` of an unchanged configuration is empty. The [upgrade tests](./README.md#upgrade-tests) check this for every resource, and that a `sysutils_file` with `sensitive_content` from v1.2.x can switch to `content_wo`, which removes the secret from the state. The functions need Terraform 1.8 or OpenTofu 1.7, and `content_wo` Terraform 1.11 or OpenTofu 1.11; with older CLIs, the rest of the provider works as before.
+
 ### New features
 
 - Provider-defined functions, for Terraform 1.8 and later and OpenTofu 1.7 and later. They are pure: they only parse their argument, so they pair with `file()` or the `sysutils_file` data source.
@@ -13,6 +21,13 @@ All notable changes to this provider are listed here. Versions follow [semantic 
   - [`provider::sysutils::mode_to_octal`](./docs/functions/mode_to_octal.md) converts a mode in octal, `ls -l` or `chmod` symbolic notation to the four-digit octal form of the `mode` attributes.
 - New data sources [`sysutils_users`](./docs/data-sources/users.md) and [`sysutils_groups`](./docs/data-sources/groups.md) list the entries of `/etc/passwd` and `/etc/group`, optionally filtered by a name regular expression, a uid or gid range, and the login shell and primary gid (users) or a member (groups). They honour the provider's `root_dir`, so they can read the accounts of an image root filesystem, and refuse databases of more than 100000 entries.
 - `sysutils_file` has a write-only `content_wo` attribute, for Terraform 1.11 and later and OpenTofu 1.11 and later. Its value is never stored in the plan or the state, so secrets can come from ephemeral variables and ephemeral resources. The file is written on create, when the new `content_wo_version` changes, and when the file on disk no longer matches what the provider last wrote, of which it keeps a salted argon2id hash in private state. `content_sha256` and `content_md5` are null with `content_wo`, as the checksums of a short secret would reveal it. `content_wo` conflicts with `content`, `sensitive_content`, `content_base64` and `source`. See [Secrets kept out of state](./docs/resources/file.md#secrets-kept-out-of-state).
+
+### Security
+
+These fix issues found in the security review of the features above, before their first release, so no released version is affected.
+
+- `sysutils_file` with `content_wo` stored `content_sha256` and `content_md5` of the write-only value in the state, and its plain SHA-256 in private state, so anyone who can read the state could test guesses of a short secret at hash speed. The checksums are now null, and drift is detected with a salted argon2id hash in private state. A refresh without such a record no longer reads the secret into the state.
+- `sysutils_users` and `sysutils_groups` accepted up to 64 MiB of tiny entries from a tree below `root_dir`, which took about 12 GB of memory to read. They now refuse databases of more than 100000 entries (groups plus members).
 
 ## 1.2.1 (2026-09-30)
 
