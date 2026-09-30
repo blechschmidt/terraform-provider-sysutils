@@ -211,14 +211,7 @@ resource "sysutils_file" "test" {
 func TestAccFile_driftDetection(t *testing.T) {
 	requireRoot(t)
 
-	nobody, err := user.Lookup("nobody")
-	if err != nil {
-		t.Skipf("nobody user not available: %v", err)
-	}
-	nogroup, err := user.LookupGroup("nogroup")
-	if err != nil {
-		t.Skipf("nogroup group not available: %v", err)
-	}
+	nobody, nogroup := lookupNobody(t)
 	nobodyUID, _ := strconv.Atoi(nobody.Uid)
 	nogroupGID, _ := strconv.Atoi(nogroup.Gid)
 

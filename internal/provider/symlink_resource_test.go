@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"os/user"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -139,14 +138,7 @@ func TestAccSymlink_createAndChangeTarget(t *testing.T) {
 func TestAccSymlink_ownership(t *testing.T) {
 	requireRoot(t)
 
-	nobody, err := user.Lookup("nobody")
-	if err != nil {
-		t.Skipf("nobody user not available: %v", err)
-	}
-	nogroup, err := user.LookupGroup("nogroup")
-	if err != nil {
-		t.Skipf("nogroup group not available: %v", err)
-	}
+	nobody, nogroup := lookupNobody(t)
 
 	base := t.TempDir()
 	targetDir := filepath.Join(base, "target")
@@ -172,10 +164,10 @@ resource "sysutils_symlink" "test" {
 		),
 		Steps: []resource.TestStep{
 			{
-				Config: config(targetDir, "nobody", "nogroup"),
+				Config: config(targetDir, "nobody", nogroup.Name),
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr(testSymlinkResource, "owner", "nobody"),
-					resource.TestCheckResourceAttr(testSymlinkResource, "group", "nogroup"),
+					resource.TestCheckResourceAttr(testSymlinkResource, "group", nogroup.Name),
 					checkLinkOwnership(link, nobody.Uid, nogroup.Gid),
 					// lchown must not touch the target.
 					checkFileUID(targetDir, "0"),

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
-	"os/user"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -95,14 +94,7 @@ resource "sysutils_directory" "test" {
 func TestAccDirectory_ownership(t *testing.T) {
 	requireRoot(t)
 
-	nobody, err := user.Lookup("nobody")
-	if err != nil {
-		t.Skipf("nobody user not available: %v", err)
-	}
-	nogroup, err := user.LookupGroup("nogroup")
-	if err != nil {
-		t.Skipf("nogroup group not available: %v", err)
-	}
+	nobody, nogroup := lookupNobody(t)
 
 	dir := filepath.Join(t.TempDir(), "owned")
 	config := func(owner, group string) string {
@@ -128,7 +120,7 @@ resource "sysutils_directory" "test" {
 				),
 			},
 			{
-				Config: config("nobody", "nogroup"),
+				Config: config("nobody", nogroup.Name),
 				ConfigPlanChecks: resource.ConfigPlanChecks{
 					PreApply: []plancheck.PlanCheck{
 						plancheck.ExpectResourceAction(testDirResource, plancheck.ResourceActionUpdate),
@@ -136,7 +128,7 @@ resource "sysutils_directory" "test" {
 				},
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr(testDirResource, "owner", "nobody"),
-					resource.TestCheckResourceAttr(testDirResource, "group", "nogroup"),
+					resource.TestCheckResourceAttr(testDirResource, "group", nogroup.Name),
 					checkFileUID(dir, nobody.Uid),
 					checkFileGID(dir, nogroup.Gid),
 					checkSameInode(dir, &inode),

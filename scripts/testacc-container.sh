@@ -9,11 +9,13 @@
 set -euo pipefail
 
 : "${TF_CLI:=terraform}"
-# Allowed by default: the systemd tests (no systemd as PID 1 in a
-# container), the kernel_module and sysctl tests (no CAP_SYS_MODULE and a
-# read-only /proc/sys in a container), and the local-baseline upgrade tests
+# Allowed by default: the systemd and OpenRC tests (no init system in the
+# container; testacc-distros.sh boots OpenRC on Alpine), the kernel_module
+# and sysctl tests (no CAP_SYS_MODULE and a read-only /proc/sys in a
+# container), and the local-baseline upgrade tests
 # unless SYSUTILS_UPGRADE_FROM_REF is set, as it is in CI.
-: "${ACC_ALLOWED_SKIPS:=systemd is not PID 1|is not in any release yet|CAP_SYS_MODULE is not in the effective capability set|the kernel does not allow setting [^ ]+ here|SYSUTILS_UPGRADE_FROM_REF is not set}"
+: "${ACC_ALLOWED_SKIPS:=systemd is not PID 1|OpenRC did not boot this host|is not in any release yet|CAP_SYS_MODULE is not in the effective capability set|the kernel does not allow setting [^ ]+ here|SYSUTILS_UPGRADE_FROM_REF is not set}"
+export ACC_ALLOWED_SKIPS
 
 if [ "$(id -u)" -ne 0 ]; then
 	echo "testacc-container.sh must run as root" >&2
@@ -35,51 +37,8 @@ report=$(mktemp)
 status=0
 # test2json events are printed as plain test output and kept in $report for
 # the skip check below.
-go test -json -count=1 -timeout "${ACC_TIMEOUT:-30m}" "$@" ./... | tee "$report" | awk '
-	/"Action":"output"/ {
-		out = $0
-		sub(/.*"Output":"/, "", out)
-		sub(/"}$/, "", out)
-		gsub(/\\\\/, "\001", out)
-		gsub(/\\n/, "\n", out)
-		gsub(/\\t/, "\t", out)
-		gsub(/\\"/, "\"", out)
-		gsub(/\\u003c/, "<", out)
-		gsub(/\\u003e/, ">", out)
-		gsub(/\\u0026/, "\\&", out)
-		gsub(/\001/, "\\", out)
-		printf "%s", out
-		fflush()
-	}' || status=$?
+go test -json -count=1 -timeout "${ACC_TIMEOUT:-30m}" "$@" ./... | tee "$report" | scripts/acc-report.sh print || status=$?
 
-# Collect the output of every skipped test and fail on unexpected skips.
-unexpected=$(awk -v allowed="$ACC_ALLOWED_SKIPS" '
-	function field(name,   s) {
-		s = $0
-		if (!sub(".*\"" name "\":\"", "", s)) return ""
-		sub(/".*/, "", s)
-		return s
-	}
-	{
-		test = field("Test")
-		if (test == "") next
-		key = field("Package") " " test
-	}
-	/"Action":"output"/ {
-		out = $0
-		sub(/.*"Output":"/, "", out)
-		sub(/"}$/, "", out)
-		if (out !~ /^(=== |--- |    --- )/) outputs[key] = outputs[key] out
-	}
-	/"Action":"skip"/ {
-		if (outputs[key] !~ allowed) printf "%s:%s\n", key, outputs[key]
-	}' "$report")
+scripts/acc-report.sh check-skips "$report" || status=$?
 rm -f "$report"
-
-if [ -n "$unexpected" ]; then
-	echo
-	echo "FAIL: tests were skipped unexpectedly (allowed: /$ACC_ALLOWED_SKIPS/):"
-	printf '%s\n' "$unexpected"
-	[ "$status" -ne 0 ] || status=1
-fi
 exit "$status"

@@ -2,6 +2,7 @@ package provider
 
 import (
 	"fmt"
+	"os"
 	"os/exec"
 	"os/user"
 	"regexp"
@@ -219,7 +220,16 @@ func TestAccUserDataSource_numericName(t *testing.T) {
 		t.Cleanup(func() { _ = exec.Command("userdel", name).Run() })
 	}
 	addUser("-u", strconv.Itoa(decoyUID), "-s", "/bin/false", "-c", "decoy", decoyName)
-	addUser("--badname", "-u", strconv.Itoa(numericUID), "-s", "/bin/sh", "-c", "numeric", numericName)
+	numericArgs := []string{"-M", "-N", "-g", "65534", "--badname", "-u", strconv.Itoa(numericUID), "-s", "/bin/sh", "-c", "numeric", numericName}
+	if out, err := exec.Command("useradd", numericArgs...).CombinedOutput(); err == nil {
+		t.Cleanup(func() { _ = exec.Command("userdel", numericName).Run() })
+	} else {
+		// shadow-utils 4.15 and later (Fedora) refuse all-digit names even
+		// with --badname, but such accounts still occur, for example from
+		// LDAP or older tools. Write the entry directly.
+		t.Logf("useradd refused the numeric name, writing /etc/passwd directly: %v: %s", err, out)
+		appendPasswdEntry(t, fmt.Sprintf("%s:x:%d:65534:numeric:/nonexistent:/bin/sh", numericName, numericUID))
+	}
 
 	resource.Test(t, resource.TestCase{
 		ProtoV6ProviderFactories: testAccProtoV6ProviderFactories,
@@ -250,5 +260,34 @@ data "sysutils_user" "test" {
 				),
 			},
 		},
+	})
+}
+
+// appendPasswdEntry appends line to /etc/passwd and removes it again when
+// the test ends.
+func appendPasswdEntry(t *testing.T, line string) {
+	t.Helper()
+	const passwd = "/etc/passwd"
+	f, err := os.OpenFile(passwd, os.O_WRONLY|os.O_APPEND, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = f.WriteString(line + "\n")
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		data, err := os.ReadFile(passwd)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		kept := strings.Replace(string(data), line+"\n", "", 1)
+		if err := os.WriteFile(passwd, []byte(kept), 0); err != nil {
+			t.Error(err)
+		}
 	})
 }

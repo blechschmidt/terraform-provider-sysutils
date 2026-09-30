@@ -9,3 +9,4 @@ coverage.out
 coverage.html
 dist/
 .cloop
+testacc-bundle/

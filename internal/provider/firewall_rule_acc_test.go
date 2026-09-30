@@ -75,7 +75,8 @@ func newFirewallNetns(t *testing.T, tools ...string) *fwNetns {
 		default:
 		}
 		if cur, err := os.Readlink(ns.path); err == nil && cur != self {
-			if exe, err := os.Readlink(fmt.Sprintf("/proc/%d/exe", cmd.Process.Pid)); err == nil && strings.HasSuffix(exe, "/sleep") {
+			// comm, not exe: on Alpine, sleep is a symlink to busybox.
+			if comm, err := os.ReadFile(fmt.Sprintf("/proc/%d/comm", cmd.Process.Pid)); err == nil && strings.TrimSpace(string(comm)) == "sleep" {
 				break
 			}
 		}

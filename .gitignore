@@ -4,3 +4,4 @@ terraform-provider-sysutils
 .terraform/
 .terraform.lock.hcl
 .cloop/
+testacc-bundle/

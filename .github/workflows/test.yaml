@@ -71,6 +71,52 @@ jobs:
       - name: Acceptance tests (${{ matrix.cli }} ${{ matrix.version }}, root in Docker)
         run: make testacc-docker TF_CLI=${{ matrix.cli }} TF_CLI_VERSION=${{ matrix.version }} SYSUTILS_UPGRADE_FROM_REF=auto
 
+  # The suite as root in stock Debian, Alpine and Fedora containers, for the
+  # distribution-specific code paths (apt/apk/dnf, OpenRC, musl, firewall,
+  # time zone and locale tools) that the Debian-based acceptance image does
+  # not cover. The static test binary, the CLI and the test files are built
+  # once and run in each distribution's job (make testacc-distros runs the
+  # same locally). Each job fails on test failures and on skips that are not
+  # expected on its distribution (see scripts/testacc-distros.sh).
+  acceptance-distros-build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5 # v6.2.0
+        with:
+          go-version-file: 'go.mod'
+          cache: true
+      - name: Build the static test binary and download Terraform
+        run: scripts/testacc-distros.sh --bundle testacc-bundle --build-only
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: testacc-bundle
+          path: testacc-bundle
+          retention-days: 1
+
+  acceptance-distros:
+    name: acceptance (${{ matrix.image }})
+    needs: acceptance-distros-build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        image: ['debian:stable', 'alpine:latest', 'fedora:latest']
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/setup-go@7a3fe6cf4cb3a834922a1244abfce67bcef6a0c5 # v6.2.0
+        with:
+          go-version-file: 'go.mod'
+          cache: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: testacc-bundle
+          path: testacc-bundle
+      - name: Acceptance tests in ${{ matrix.image }} (root in Docker)
+        run: scripts/testacc-distros.sh --bundle testacc-bundle '${{ matrix.image }}'
+
   # examples/complete end to end with the provider built from this commit:
   # init, plan, apply, a second plan that must be empty, and destroy (see
   # scripts/e2e-complete.sh). Runs directly on the runner VM as root, because

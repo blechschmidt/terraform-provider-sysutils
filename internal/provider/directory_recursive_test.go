@@ -443,17 +443,21 @@ func TestChmodPathFD(t *testing.T) {
 	}
 }
 
+// lookupNobody returns the unprivileged nobody user and its group, which is
+// "nogroup" on Debian and Ubuntu and "nobody" on Fedora, RHEL and Alpine.
 func lookupNobody(t *testing.T) (*user.User, *user.Group) {
 	t.Helper()
 	nobody, err := user.Lookup("nobody")
 	if err != nil {
 		t.Skipf("nobody user not available: %v", err)
 	}
-	nogroup, err := user.LookupGroup("nogroup")
-	if err != nil {
-		t.Skipf("nogroup group not available: %v", err)
+	for _, name := range []string{"nogroup", "nobody"} {
+		if g, err := user.LookupGroup(name); err == nil && g.Gid != "0" {
+			return nobody, g
+		}
 	}
-	return nobody, nogroup
+	t.Skip("neither a nogroup nor a nobody group is available")
+	return nil, nil
 }
 
 func mustChmod(t *testing.T, p string, mode uint32) {

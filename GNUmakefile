@@ -48,6 +48,17 @@ testacc-docker-matrix:
 	$(MAKE) testacc-docker TF_CLI=terraform TF_CLI_VERSION=latest
 	$(MAKE) testacc-docker TF_CLI=tofu TF_CLI_VERSION=latest
 
+# Run the suite as root in stock distribution containers (Debian, Alpine
+# with OpenRC booted, Fedora), to cover the apt/apk/dnf, OpenRC, musl and
+# distribution-specific firewall, time zone and locale code paths. Builds a
+# static test binary once and runs it in each image with docker; see
+# scripts/testacc-distros.sh. CI runs the same in its acceptance-distros job.
+# Override the images with DISTROS="debian:stable fedora:latest".
+DISTROS ?= debian:stable alpine:latest fedora:latest
+
+testacc-distros:
+	TF_CLI=$(TF_CLI) TF_CLI_VERSION=$(TF_CLI_VERSION) scripts/testacc-distros.sh $(DISTROS)
+
 # Kept for existing scripts and docs.
 test-docker: testacc-docker
 
@@ -93,4 +104,4 @@ docs-check:
 examples-check:
 	TF_CLI=terraform scripts/check-examples.sh
 
-.PHONY: build install test testacc testacc-docker testacc-docker-matrix test-docker e2e coverage lint docs docs-check examples-check
+.PHONY: build install test testacc testacc-docker testacc-docker-matrix testacc-distros test-docker e2e coverage lint docs docs-check examples-check
