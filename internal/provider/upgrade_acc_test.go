@@ -31,7 +31,7 @@ import (
 
 // defaultUpgradeFromVersion is the release the upgrade tests start from.
 // SYSUTILS_UPGRADE_FROM_VERSION overrides it. Bump it after every release.
-const defaultUpgradeFromVersion = "1.0.1"
+const defaultUpgradeFromVersion = "1.1.0"
 
 const (
 	upgradeProviderHost      = "registry.terraform.io"
@@ -45,7 +45,7 @@ const (
 var upgradeFirstRelease = map[string]string{
 	"sysutils_file":      "1.0.0",
 	"sysutils_exec":      "1.0.0",
-	"sysutils_directory": "",
+	"sysutils_directory": "1.1.0",
 }
 
 func upgradeFromVersion() string {
