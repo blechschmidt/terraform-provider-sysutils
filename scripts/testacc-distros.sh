@@ -51,8 +51,9 @@ allowed_skips() {
 	alpine*)
 		# musl has no locale database: no locale, locale-gen or localedef.
 		# Alpine has no alternatives system (update-alternatives or
-		# chkconfig alternatives). The apt-only package test.
-		echo 'neither locale-gen nor localedef is installed|the locale command was not found|no alternatives tool|package manager is apk, not apt'
+		# chkconfig alternatives). The apt-only package test. sudo is not
+		# installed, so the tests that need visudo skip.
+		echo 'neither locale-gen nor localedef is installed|the locale command was not found|no alternatives tool|package manager is apk, not apt|visudo is not installed'
 		;;
 	fedora* | *rhel* | *centos* | *almalinux* | *rockylinux*)
 		# Only the Alpine container boots OpenRC. The apt-only package test.

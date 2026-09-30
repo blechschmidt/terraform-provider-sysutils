@@ -25,15 +25,18 @@ debian | ubuntu)
 	# locales, tzdata: locale-gen and zone files. iproute2, iptables,
 	# nftables: the firewall rule tests. passwd: useradd/groupadd.
 	# util-linux, mount: unshare/nsenter, mkswap/swapon and losetup.
+	# sudo: visudo for the sudoers tests.
 	retry apt-get update -q
 	retry apt-get install -y -q --no-install-recommends \
 		acl attr ca-certificates iproute2 iptables locales mount nftables \
-		passwd tzdata util-linux
+		passwd sudo tzdata util-linux
 	;;
 alpine)
 	# shadow: useradd/groupadd/gpasswd (busybox adduser is not enough).
 	# util-linux-misc: unshare/nsenter with --net. musl has no locales, so
 	# the locale tests skip (see ACC_ALLOWED_SKIPS in testacc-distros.sh).
+	# sudo is left out on purpose, so that the sudoers tests cover a host
+	# without visudo.
 	retry apk add --no-cache \
 		acl attr ca-certificates iproute2 iptables ip6tables nftables \
 		openrc busybox-openrc shadow tzdata util-linux util-linux-misc losetup
@@ -47,9 +50,10 @@ fedora | rhel | centos | almalinux | rocky)
 	# glibc-locale-source: localedef input for the locale tests.
 	# iptables-nft, nftables, iproute: the firewall rule tests.
 	# shadow-utils: useradd. util-linux: unshare/nsenter, losetup, mkswap.
+	# sudo: visudo for the sudoers tests.
 	retry dnf install -y -q --setopt=install_weak_deps=False \
 		acl attr ca-certificates glibc-locale-source iproute iptables-nft \
-		nftables shadow-utils tzdata util-linux
+		nftables shadow-utils sudo tzdata util-linux
 	dnf clean all -q
 	;;
 *)

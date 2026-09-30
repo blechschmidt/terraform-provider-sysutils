@@ -732,6 +732,31 @@ resource "sysutils_cron_job" "test" {
 	})
 }
 
+func TestAccUpgradeLocal_sudoers(t *testing.T) {
+	if os.Getenv("TF_ACC") == "" {
+		t.Skip("acceptance test; set TF_ACC=1 to run")
+	}
+	requireRoot(t)
+	requireVisudo(t)
+	name := "sysutils-acc-upgrade-" + randomID()
+	p := filepath.Join(defaultSudoersDir, name)
+	t.Cleanup(func() { _ = os.Remove(p) })
+	resource.Test(t, resource.TestCase{
+		Steps: localUpgradeSteps(t, "sysutils_sudoers", fmt.Sprintf(`
+resource "sysutils_sudoers" "test" {
+  name = %q
+  rules = [{
+    users    = ["root"]
+    runas    = "root"
+    nopasswd = true
+    commands = ["/usr/bin/true"]
+  }]
+}
+`, name)),
+		CheckDestroy: checkSudoersGone(p),
+	})
+}
+
 func TestAccUpgradeLocal_package(t *testing.T) {
 	name := accPackageName()
 	mgr := requirePackageManager(t, name)

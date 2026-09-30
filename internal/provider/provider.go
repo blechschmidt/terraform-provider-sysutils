@@ -33,6 +33,10 @@ type sysutilsProvider struct {
 	// sysutils_cron_job. It is nil in production and set by tests to a
 	// temporary directory.
 	cron *cronConfig
+	// sudoers overrides the sudoers.d directory, file owner and visudo of
+	// sysutils_sudoers. It is nil in production and set by tests to a
+	// temporary directory or a fake visudo.
+	sudoers *sudoersConfig
 	// pkg overrides how sysutils_package reaches the package manager. It is
 	// nil in production and set by unit tests to a fake package manager or
 	// command runner.
@@ -83,6 +87,7 @@ type providerData struct {
 	sysctl       *sysctlConfig
 	kernelModule *kernelModuleConfig
 	cron         *cronConfig
+	sudoers      *sudoersConfig
 	pkg          *packageConfig
 	repo         *repoConfig
 	service      *serviceConfig
@@ -94,7 +99,7 @@ type providerData struct {
 	alternatives *alternativesConfig
 	host         *hostConfig
 	// root is the directory that the paths of the file, file line, template
-	// file, directory, symlink, archive extract, cron job, package repository, timezone, locale and swap resources and the file and
+	// file, directory, symlink, archive extract, cron job, sudoers, package repository, timezone, locale and swap resources and the file and
 	// directory data sources are confined to, and that the host data source
 	// reads os-release and looks for package managers in; see rootfs.go.
 	root *fsRoot
@@ -117,7 +122,7 @@ func (p *sysutilsProvider) Metadata(_ context.Context, _ provider.MetadataReques
 
 func (p *sysutilsProvider) Schema(_ context.Context, _ provider.SchemaRequest, resp *provider.SchemaResponse) {
 	resp.Schema = schema.Schema{
-		MarkdownDescription: "The `sysutils` provider exposes a small set of primitives for host-level administration from Terraform: files, `/etc/hosts` entries, directories, symlinks, archives, local users and groups, systemd units and services, mounts, swap, kernel parameters and modules, the time zone and locale, cron jobs, SSH authorized keys, firewall rules, OS packages and package repositories, alternatives links, and command execution, and reports host facts such as the distribution for use in conditionals. " +
+		MarkdownDescription: "The `sysutils` provider exposes a small set of primitives for host-level administration from Terraform: files, `/etc/hosts` entries, directories, symlinks, archives, local users and groups, systemd units and services, mounts, swap, kernel parameters and modules, the time zone and locale, cron jobs, sudo rules, SSH authorized keys, firewall rules, OS packages and package repositories, alternatives links, and command execution, and reports host facts such as the distribution for use in conditionals. " +
 			"All arguments are optional.",
 		Attributes: map[string]schema.Attribute{
 			"root_dir": schema.StringAttribute{
@@ -125,7 +130,7 @@ func (p *sysutilsProvider) Schema(_ context.Context, _ provider.SchemaRequest, r
 				MarkdownDescription: "Directory that every managed path is relative to, as if the provider ran in a chroot there. " +
 					"With `root_dir = \"/srv/rootfs\"`, a `sysutils_file` with `path = \"/etc/hosts\"` writes `/srv/rootfs/etc/hosts`. " +
 					"Use it to build a container or OS image root filesystem tree. " +
-					"Applies to the `sysutils_file`, `sysutils_file_line`, `sysutils_ini_value`, `sysutils_hosts_entry`, `sysutils_template_file`, `sysutils_directory`, `sysutils_symlink`, `sysutils_archive_extract` (its `destination`), `sysutils_cron_job`, `sysutils_package_repository`, `sysutils_timezone`, `sysutils_locale` and `sysutils_swap` resources and the `sysutils_file` and `sysutils_directory` data sources. " +
+					"Applies to the `sysutils_file`, `sysutils_file_line`, `sysutils_ini_value`, `sysutils_hosts_entry`, `sysutils_template_file`, `sysutils_directory`, `sysutils_symlink`, `sysutils_archive_extract` (its `destination`), `sysutils_cron_job`, `sysutils_sudoers`, `sysutils_package_repository`, `sysutils_timezone`, `sysutils_locale` and `sysutils_swap` resources and the `sysutils_file` and `sysutils_directory` data sources. " +
 					"The `sysutils_host` data source reads `os-release` and looks for the package manager below it, but reports the running host's kernel, names, hardware, init system and firewall. " +
 					"`sysutils_mount`, `sysutils_sysctl`, `sysutils_kernel_module`, `sysutils_service`, `sysutils_package`, `sysutils_ssh_authorized_key`, `sysutils_firewall_rule` and `sysutils_alternatives` change the running host and refuse to plan when `root_dir` is set, as does `sysutils_package_repository` with `refresh_cache = true`, `sysutils_locale` with `generate = true` and `sysutils_swap` with `enabled = true` or a block device. " +
 					"`path` attributes, ids and import ids keep the path inside the root. " +
@@ -159,7 +164,7 @@ func (p *sysutilsProvider) Configure(ctx context.Context, req provider.Configure
 			return
 		}
 	}
-	data := &providerData{systemd: p.systemd, mount: p.mount, sysctl: p.sysctl, kernelModule: p.kernelModule, cron: p.cron, pkg: p.pkg, repo: p.repo, service: p.service, sshKey: p.sshKey, timezone: p.timezone, locale: p.locale, firewall: p.firewall, swap: p.swap, alternatives: p.alternatives, host: p.host, root: root}
+	data := &providerData{systemd: p.systemd, mount: p.mount, sysctl: p.sysctl, kernelModule: p.kernelModule, cron: p.cron, sudoers: p.sudoers, pkg: p.pkg, repo: p.repo, service: p.service, sshKey: p.sshKey, timezone: p.timezone, locale: p.locale, firewall: p.firewall, swap: p.swap, alternatives: p.alternatives, host: p.host, root: root}
 	resp.ResourceData = data
 	resp.DataSourceData = data
 }
@@ -261,6 +266,7 @@ func (p *sysutilsProvider) Resources(_ context.Context) []func() resource.Resour
 		NewSysctlResource,
 		NewKernelModuleResource,
 		NewCronJobResource,
+		NewSudoersResource,
 		NewSSHAuthorizedKeyResource,
 		NewHostsEntryResource,
 		NewTimezoneResource,

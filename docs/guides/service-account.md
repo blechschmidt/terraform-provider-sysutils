@@ -23,6 +23,8 @@ The configuration must be applied as root: it creates an account and assigns own
 | `/etc/myapp/myapp.toml` | `root:myapp` | `0640` | Configuration. Owned by root so a compromised service cannot change it. |
 | `/var/lib/myapp` | `myapp:myapp` | `0700` | Home and state directory; only the service can access it. |
 | `/var/log/myapp` | `myapp:myapp` | `2750` | Logs. The setgid bit gives new log files the `myapp` group, so members of the group can read them. |
+| group `myapp-admins` | | | Operators of the service. |
+| `/etc/sudoers.d/50-myapp-admins` | `root:root` | `0440` | Lets operators restart the service and read its logs through sudo, and nothing else. |
 
 ## Configuration
 
@@ -138,6 +140,36 @@ output "config_sha256" {
 }
 ```
 
+### Letting operators restart the service
+
+Operators need to restart the service and read its logs, but not a root shell. A [`sysutils_sudoers`](../resources/sudoers.md) drop-in grants exactly those commands to a group of their own:
+
+```terraform
+# 5. Operators: members of myapp-admins may restart the service and read its
+#    status and logs as root, without a password, and nothing else. visudo
+#    checks the file before it is installed.
+resource "sysutils_group" "myapp_admins" {
+  name = "myapp-admins"
+}
+
+resource "sysutils_sudoers" "myapp_admins" {
+  name = "50-myapp-admins"
+
+  rules = [{
+    users    = ["%${sysutils_group.myapp_admins.name}"]
+    runas    = "root"
+    nopasswd = true
+    commands = [
+      "/usr/bin/systemctl restart myapp.service",
+      "/usr/bin/systemctl status myapp.service",
+      "/usr/bin/journalctl -u myapp.service",
+    ]
+  }]
+}
+```
+
+Before the file is renamed into place, `visudo -cf` checks it, so a mistake fails the apply with visudo's message instead of breaking sudo for everyone. The name `50-myapp-admins` contains no `.`: sudo silently skips files in `/etc/sudoers.d` whose names do, and the resource refuses such names at plan time. Add operators with a [`sysutils_group`](../resources/group.md) `members` list or `sysutils_user` `groups`.
+
 ## How it works
 
 **Ordering comes from references.** The user refers to `sysutils_group.myapp.gid`, the directories refer to the user and group names, and the file and symlink refer to directory paths. Terraform therefore creates the group, then the user, then the directories, then the file, and destroys them in reverse order. There is no need for `depends_on`.
@@ -178,6 +210,8 @@ terraform import sysutils_directory.state /var/lib/myapp
 terraform import sysutils_directory.logs /var/log/myapp
 terraform import sysutils_file.config /etc/myapp/myapp.toml
 terraform import sysutils_symlink.current /opt/myapp/current
+terraform import sysutils_group.myapp_admins myapp-admins
+terraform import sysutils_sudoers.myapp_admins 50-myapp-admins
 ```
 
 Then run `terraform plan`. It lists every difference between what is on disk and this configuration, and nothing is changed until you apply. Options that describe how Terraform manages a resource rather than what is on disk, such as `force_destroy` and `recursive_owner`, are set to their defaults on import, and the group's `system` flag cannot be read back from `/etc/group`, so expect them to show up as in-place updates.

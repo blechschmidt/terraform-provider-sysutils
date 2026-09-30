@@ -19,6 +19,7 @@ ARG TF_CLI_VERSION=latest
 # tests.
 # nftables, iptables, iproute2: the firewall rule tests, which run them in a
 # network namespace of their own.
+# sudo: visudo for the sudoers tests.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         acl \
@@ -30,6 +31,7 @@ RUN apt-get update \
         locales \
         nftables \
         passwd \
+        sudo \
         tzdata \
         unzip \
     && rm -rf /var/lib/apt/lists/*

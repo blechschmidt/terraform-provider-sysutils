@@ -522,6 +522,10 @@ type replaceAttrs struct {
 	// dropACL removes an access ACL that the file inherited from a default
 	// ACL on the directory and that xattrs does not set.
 	dropACL bool
+	// check, if set, is called with the path of the complete temporary
+	// file, which already has these attributes, before it is renamed into
+	// place. An error abandons the edit and leaves target untouched.
+	check func(tmp string) error
 }
 
 // replaceFileAtomicWith is replaceFileAtomic with explicitly given
@@ -558,6 +562,11 @@ func replaceFileAtomicWith(target string, data []byte, orig *fileSnapshot, attrs
 	}
 	if err := f.Close(); err != nil {
 		return err
+	}
+	if attrs.check != nil {
+		if err := attrs.check(tmp); err != nil {
+			return err
+		}
 	}
 
 	if err := checkUnchanged(target, orig); err != nil {
