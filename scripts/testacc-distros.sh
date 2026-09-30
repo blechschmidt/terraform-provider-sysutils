@@ -44,8 +44,11 @@ read -r -a images <<<"${*:-${DISTROS:-debian:stable alpine:latest fedora:latest}
 # which need go and git. Whether su's PAM session runs pam_limits depends on
 # the distribution (Debian ships it commented out). The file_attributes
 # tests run on the container's overlayfs (there are no loop devices for an
-# ext4 image), which has inode flags only on kernels >= 5.15.
-common_skips='the file system of [^ ]+ does not support inode flags|the su PAM session does not use pam_limits on this host|systemd is not PID 1|is not in any release yet|CAP_SYS_MODULE is not in the effective capability set|the kernel does not allow setting [^ ]+ here|swapon is not permitted here|SYSUTILS_UPGRADE_FROM_REF is not set'
+# ext4 image), which has inode flags only on kernels >= 5.15. Tests gated on
+# the Terraform CLI version (provider functions need 1.8, write-only
+# attributes 1.11, and the check that older CLIs reject them needs <= 1.10)
+# skip on the CLIs outside their range.
+common_skips='Terraform CLI version [^ ]+ is (below minimum|above maximum) version|the file system of [^ ]+ does not support inode flags|the su PAM session does not use pam_limits on this host|systemd is not PID 1|is not in any release yet|CAP_SYS_MODULE is not in the effective capability set|the kernel does not allow setting [^ ]+ here|swapon is not permitted here|SYSUTILS_UPGRADE_FROM_REF is not set'
 
 # allowed_skips IMAGE prints the skip reasons allowed on IMAGE on top of
 # common_skips.
