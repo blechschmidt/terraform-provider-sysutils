@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"testing"
@@ -191,15 +192,29 @@ const upgradeRegistryConfirmations = 5
 // a release, some of the registry's CDN edges still serve the old list of
 // versions, and "init" fails with "no available releases match the given
 // constraints", so the version must be seen upgradeRegistryConfirmations
-// times in a row.
+// times in a row. The CDN keeps a separate copy of each response per
+// X-Terraform-Version request header (and may serve a stale one for up to
+// 30 minutes while it revalidates), so the requests carry the header that
+// the CLI of the test sends.
 func waitForRegistryVersion(t *testing.T, version string) {
 	t.Helper()
 	base := fmt.Sprintf("https://%s/v1/providers/%s/sysutils", upgradeProviderHost, upgradeProviderNamespace)
 	versionsURL := base + "/versions"
 	downloadURL := fmt.Sprintf("%s/%s/download/linux/%s", base, version, runtime.GOARCH)
+	cliVersion, err := testCLIVersion()
+	if err != nil {
+		t.Fatal(err)
+	}
 	client := &http.Client{Timeout: 30 * time.Second}
 	get := func(url string, body any) (int, error) {
-		resp, err := client.Get(url)
+		req, err := http.NewRequest(http.MethodGet, url, nil)
+		if err != nil {
+			return 0, err
+		}
+		if cliVersion != "" {
+			req.Header.Set("X-Terraform-Version", cliVersion)
+		}
+		resp, err := client.Do(req)
 		if err != nil {
 			return 0, err
 		}
@@ -264,6 +279,32 @@ func waitForRegistryVersion(t *testing.T, version string) {
 		t.Logf("%s; retrying", why)
 		time.Sleep(15 * time.Second)
 	}
+}
+
+// testCLIVersion returns the version of the CLI the acceptance tests use
+// (TF_ACC_TERRAFORM_PATH, or terraform in PATH), which Terraform and
+// OpenTofu send to registries in the X-Terraform-Version header, or "" if
+// plugin-testing is left to install Terraform itself.
+func testCLIVersion() (string, error) {
+	cli := os.Getenv("TF_ACC_TERRAFORM_PATH")
+	if cli == "" {
+		p, err := exec.LookPath("terraform")
+		if err != nil {
+			return "", nil
+		}
+		cli = p
+	}
+	out, err := exec.Command(cli, "version", "-json").Output()
+	if err != nil {
+		return "", fmt.Errorf("%s version -json: %w", cli, err)
+	}
+	var v struct {
+		Version string `json:"terraform_version"`
+	}
+	if err := json.Unmarshal(out, &v); err != nil || v.Version == "" {
+		return "", fmt.Errorf("%s version -json: no terraform_version in %q", cli, out)
+	}
+	return v.Version, nil
 }
 
 func TestAccUpgrade_file(t *testing.T) {
