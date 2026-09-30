@@ -143,6 +143,7 @@ func TestCheckAlternativesPaths(t *testing.T) {
 func TestAlternatives_untrustedPathRefused(t *testing.T) {
 	dir := untrustedAltTree(t)
 	f := newFakeAlternatives(t, alternativesDebian)
+	f.checkPaths = checkAlternativesPaths
 	theirs := filepath.Join(dir, "nobody", "tool")
 	f.add("editor", "/usr/bin/editor",
 		alternativeEntry{Path: "/bin/nano", Priority: 40},

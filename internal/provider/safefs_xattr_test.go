@@ -57,6 +57,7 @@ func editAtomically(t *testing.T, p, content string) {
 // owning group, which the ACL denied any access, ended up with read-write
 // access, and the named user lost theirs.
 func TestReplaceFileAtomicPreservesACL(t *testing.T) {
+	requireRoot(t)
 	dir := t.TempDir()
 	requireACLs(t, dir)
 	p := filepath.Join(dir, "f")

@@ -33,6 +33,11 @@ type fakeAlternatives struct {
 	failSet bool
 	// ignoreSet makes --set succeed without effect.
 	ignoreSet bool
+	// checkPaths replaces the provider's path check. It is a no-op by
+	// default: the fake's paths are made up, and whether the real
+	// directories above them (/usr/local/bin, /opt) are trusted depends on
+	// the host, for example on CI runners that run tests as a normal user.
+	checkPaths func(link, path string) error
 }
 
 type fakeLinkGroup struct {
@@ -57,7 +62,10 @@ func (g *fakeLinkGroup) best() string {
 
 func newFakeAlternatives(t *testing.T, kind string) *fakeAlternatives {
 	t.Helper()
-	return &fakeAlternatives{t: t, kind: kind, adminDir: t.TempDir(), groups: map[string]*fakeLinkGroup{}}
+	return &fakeAlternatives{
+		t: t, kind: kind, adminDir: t.TempDir(), groups: map[string]*fakeLinkGroup{},
+		checkPaths: func(string, string) error { return nil },
+	}
 }
 
 // fakeAlternativesDir is where the fake's commands appear to be. It must
@@ -75,6 +83,7 @@ func (f *fakeAlternatives) config() *alternativesConfig {
 			return "", errors.New("not found")
 		},
 		rhelAdminDir: f.adminDir,
+		checkPaths:   f.checkPaths,
 	}
 }
 

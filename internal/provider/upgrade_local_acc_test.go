@@ -43,7 +43,9 @@ import (
 //
 //   - "auto": for each resource, the merge base of HEAD and main (or
 //     origin/main) if the resource exists there, otherwise the commit that
-//     added the resource.
+//     added the resource. On main itself the merge base is HEAD, so the
+//     latest v* release tag before HEAD (or HEAD^ if there is none) is used
+//     instead.
 //   - any other value: a git ref such as "v1.0.1", "main" or "HEAD~3". A
 //     resource that does not exist at that ref is tested from the commit that
 //     added it instead.
@@ -143,6 +145,17 @@ func upgradeBaselineCommit(t *testing.T, root, resourceType string) string {
 		var err error
 		if base, err = upgradeGit(root, "merge-base", "HEAD", mainCommit); err != nil {
 			t.Fatalf("%s=auto: %v (a shallow clone has no merge base; fetch the full history)", upgradeFromRefEnv, err)
+		}
+		// On main (or a commit already merged into it), upgrading from
+		// the merge base would test HEAD against itself.
+		if head, err := upgradeResolveCommit(root, "HEAD"); err == nil && head == base {
+			prev := "HEAD^"
+			if tag, err := upgradeGit(root, "describe", "--tags", "--abbrev=0", "--match", "v*", "HEAD^"); err == nil {
+				prev = tag
+			}
+			if base, err = upgradeResolveCommit(root, prev); err != nil {
+				t.Fatalf("%s=auto: HEAD is on main and %s is not a commit: %v", upgradeFromRefEnv, prev, err)
+			}
 		}
 	} else {
 		var err error

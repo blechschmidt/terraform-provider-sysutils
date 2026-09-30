@@ -12,9 +12,10 @@ set -euo pipefail
 # Allowed by default: the systemd and OpenRC tests (no init system in the
 # container; testacc-distros.sh boots OpenRC on Alpine), the kernel_module
 # and sysctl tests (no CAP_SYS_MODULE and a read-only /proc/sys in a
-# container), and the local-baseline upgrade tests
+# container), the swap tests (swapon is not permitted in a container),
+# and the local-baseline upgrade tests
 # unless SYSUTILS_UPGRADE_FROM_REF is set, as it is in CI.
-: "${ACC_ALLOWED_SKIPS:=systemd is not PID 1|OpenRC did not boot this host|is not in any release yet|CAP_SYS_MODULE is not in the effective capability set|the kernel does not allow setting [^ ]+ here|SYSUTILS_UPGRADE_FROM_REF is not set}"
+: "${ACC_ALLOWED_SKIPS:=systemd is not PID 1|OpenRC did not boot this host|is not in any release yet|CAP_SYS_MODULE is not in the effective capability set|the kernel does not allow setting [^ ]+ here|swapon is not permitted here|SYSUTILS_UPGRADE_FROM_REF is not set}"
 export ACC_ALLOWED_SKIPS
 
 if [ "$(id -u)" -ne 0 ]; then
