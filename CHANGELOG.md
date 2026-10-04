@@ -4,6 +4,17 @@ All notable changes to this provider are listed here. Versions follow [semantic 
 
 ## Unreleased
 
+### Upgrading from v1.4.0
+
+State written by v1.4.0 keeps working. `sysutils_systemd_unit` gains the section attributes, and `content` becomes computed as well as optional: after upgrading, the first refresh fills them in from the unit file, so the first `terraform plan` of an unchanged configuration is empty. A plan with `-refresh=false` before any refresh shows them as changing; nothing is written by applying it. The [upgrade tests](./README.md#upgrade-tests) check this for units configured with `content` and with `source`.
+
+### New features
+
+- [`sysutils_systemd_unit`](./docs/resources/systemd_unit.md) can define the unit file with attributes instead of text: every section is an attribute (`unit`, `service`, `socket`, `mount`, `automount`, `swap`, `timer`, `path_section`, `slice`, `install`), and every directive that systemd 239 to 262 knows in it is a nested attribute in snake case, such as `service.exec_start` or `unit.after`. Directives that may be repeated are lists, written one line per element; an empty string writes an empty assignment that resets the directive. `extra` in each section and `extra_sections` take directives and sections that have no attribute. The table of directives is generated from systemd's own sources by `scripts/gen-systemd-directives.py`, and each attribute links to its documentation and notes the systemd version that introduced or retired it. The provider writes the file in a fixed form and shows it in `content` at plan time. Units configured with `content` or `source`, and imported units, report their file in the section attributes, so drift shows up per directive.
+- `sysutils_systemd_unit` supports every unit type that has unit files: `.device` units, and `.mount`, `.swap` and `.slice` units that systemd already knows without a unit file, are now allowed, as are templates (`app@.service`) and instance-specific unit files (`app@one.service`). Templates cannot be started, so `state` must be unset for them; `enabled = true` enables the instance named by `DefaultInstance=`. Changing a template restarts its running instances, and destroying it stops them.
+- `sysutils_systemd_unit` no longer restarts or re-enables a unit when its file changes only in comments, blank lines, whitespace or line continuations; it only reloads systemd then.
+- New resource [`sysutils_systemd_dropin`](./docs/resources/systemd_dropin.md) manages a drop-in, `/etc/systemd/system/<unit_name>.d/<name>.conf`, as text or with the same section attributes plus `scope` for scope units. `unit_name` may be any unit (including scope and device units), a template, an instance, a name prefix such as `user-.slice`, or a unit type such as `service` for all units of that type. It reloads systemd, checks that the unit still loads, and restarts a running service, socket, mount, automount, swap, timer or path unit when the drop-in changes or is removed (`restart_on_change`). Drop-ins can be imported as `<unit_name>/<name>`.
+
 ## 1.4.0 (2026-09-30)
 
 Ephemeral resources, actions, and resources for logrotate and journald drop-ins. The resources, data sources and functions of v1.3.0 are unchanged.

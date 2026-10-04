@@ -610,6 +610,55 @@ resource "sysutils_systemd_unit" "test" {
 	})
 }
 
+// State of a unit configured with source has no content and no sections
+// before the upgrade; the refresh after it fills them in.
+func TestAccUpgradeLocal_systemdUnitSource(t *testing.T) {
+	requireSystemd(t)
+	name := "tfacc-sysutils-upgrade-" + randomID() + ".timer"
+	src := filepath.Join(t.TempDir(), "unit.timer")
+	if err := os.WriteFile(src, []byte("[Timer]\nOnCalendar=daily\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	resource.Test(t, resource.TestCase{
+		Steps: localUpgradeSteps(t, "sysutils_systemd_unit", fmt.Sprintf(`
+resource "sysutils_systemd_unit" "test" {
+  name   = %q
+  source = %q
+}
+`, name, src),
+			statecheck.ExpectKnownValue("sysutils_systemd_unit.test", tfjsonpath.New("timer").AtMapKey("on_calendar"),
+				knownvalue.ListExact([]knownvalue.Check{knownvalue.StringExact("daily")}))),
+		CheckDestroy: checkRealUnitRemoved(name),
+	})
+}
+
+func TestAccUpgradeLocal_systemdDropIn(t *testing.T) {
+	requireSystemd(t)
+	unit := "tfacc-sysutils-upgrade-" + randomID() + ".service"
+	resource.Test(t, resource.TestCase{
+		Steps: localUpgradeSteps(t, "sysutils_systemd_dropin", fmt.Sprintf(`
+resource "sysutils_systemd_unit" "test" {
+  name    = %q
+  state   = "running"
+  timeout = "30s"
+  service = {
+    exec_start = ["/bin/sleep infinity"]
+  }
+}
+
+resource "sysutils_systemd_dropin" "test" {
+  unit_name = sysutils_systemd_unit.test.name
+  name      = "50-env"
+  timeout   = "30s"
+  service = {
+    environment = ["MODE=upgrade"]
+  }
+}
+`, unit)),
+		CheckDestroy: checkRealUnitRemoved(unit),
+	})
+}
+
 func TestAccUpgradeLocal_service(t *testing.T) {
 	requireSystemd(t)
 	name := installTestUnit(t)

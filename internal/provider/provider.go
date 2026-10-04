@@ -301,6 +301,7 @@ func (p *sysutilsProvider) Resources(_ context.Context) []func() resource.Resour
 		NewGroupResource,
 		NewExecResource,
 		NewSystemdUnitResource,
+		NewSystemdDropInResource,
 		NewServiceResource,
 		NewMountResource,
 		NewSwapResource,

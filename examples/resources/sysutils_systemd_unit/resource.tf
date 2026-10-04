@@ -1,30 +1,44 @@
 # Run a small web service as the "appsvc" user, start it now and at boot.
+# Every section of the unit file is an attribute, and every directive a
+# nested attribute in snake case. Directives that may be repeated are lists.
 resource "sysutils_systemd_unit" "app" {
   name    = "app.service"
   enabled = true
   state   = "running"
 
-  content = <<-EOT
-    [Unit]
-    Description=Example application
-    After=network-online.target
-    Wants=network-online.target
+  unit = {
+    description = "Example application"
+    after       = ["network-online.target"]
+    wants       = ["network-online.target"]
+  }
 
-    [Service]
-    User=appsvc
-    ExecStart=/usr/bin/python3 -m http.server 8080 --bind 127.0.0.1
-    Restart=on-failure
+  service = {
+    user        = "appsvc"
+    exec_start  = ["/usr/bin/python3 -m http.server 8080 --bind 127.0.0.1"]
+    environment = ["PYTHONUNBUFFERED=1"]
+    restart     = "on-failure"
 
-    [Install]
-    WantedBy=multi-user.target
-  EOT
+    # Sandboxing, see systemd.exec(5).
+    no_new_privileges = true
+    protect_system    = "strict"
+    protect_home      = true
+    private_tmp       = true
+  }
+
+  install = {
+    wanted_by = ["multi-user.target"]
+  }
 }
 
 # A oneshot service triggered by a timer. The service itself is neither
 # enabled nor started; the timer is.
 resource "sysutils_systemd_unit" "backup" {
-  name   = "backup.service"
-  source = "${path.module}/units/backup.service"
+  name = "backup.service"
+
+  service = {
+    type       = "oneshot"
+    exec_start = ["/usr/local/bin/backup --all"]
+  }
 }
 
 resource "sysutils_systemd_unit" "backup_timer" {
@@ -32,15 +46,13 @@ resource "sysutils_systemd_unit" "backup_timer" {
   enabled = true
   state   = "running"
 
-  content = <<-EOT
-    [Timer]
-    OnCalendar=daily
-    Persistent=true
+  timer = {
+    on_calendar = ["daily"]
+    persistent  = true
+    unit        = sysutils_systemd_unit.backup.name
+  }
 
-    [Install]
-    WantedBy=timers.target
-  EOT
-
-  # Make sure the service exists before the timer can fire.
-  depends_on = [sysutils_systemd_unit.backup]
+  install = {
+    wanted_by = ["timers.target"]
+  }
 }

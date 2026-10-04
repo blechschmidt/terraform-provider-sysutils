@@ -155,6 +155,30 @@ func (s systemctl) show(ctx context.Context, name string, props ...string) (map[
 	return parseShowOutput(res.Stdout.String()), nil
 }
 
+// showAll returns the requested properties of every loaded unit matching
+// the glob pattern, one map per unit.
+func (s systemctl) showAll(ctx context.Context, pattern string, props ...string) ([]map[string]string, error) {
+	args := []string{"show"}
+	for _, p := range props {
+		args = append(args, "--property="+p)
+	}
+	args = append(args, "--", pattern)
+	res, err := s.exec(ctx, args...)
+	if err != nil {
+		return nil, err
+	}
+	if res.ExitCode != 0 {
+		return nil, commandFailedError(args, res)
+	}
+	var out []map[string]string
+	for _, block := range strings.Split(res.Stdout.String(), "\n\n") {
+		if props := parseShowOutput(block); len(props) > 0 {
+			out = append(out, props)
+		}
+	}
+	return out, nil
+}
+
 // parseShowOutput parses the KEY=VALUE lines printed by "systemctl show".
 func parseShowOutput(out string) map[string]string {
 	props := map[string]string{}
@@ -194,41 +218,62 @@ func unitRunState(active string) string {
 }
 
 // unitSuffixes are the unit types that sysutils_systemd_unit can manage as a
-// unit file. Device and scope units cannot be defined by unit files.
+// unit file. Scope units cannot be defined by unit files, only configured by
+// drop-ins (dropInUnitSuffixes).
 var unitSuffixes = []string{
-	".service", ".socket", ".target", ".timer", ".path",
-	".mount", ".automount", ".swap", ".slice",
+	".service", ".socket", ".device", ".mount", ".automount", ".swap",
+	".target", ".path", ".timer", ".slice",
 }
+
+// dropInUnitSuffixes are the unit types that sysutils_systemd_dropin accepts.
+var dropInUnitSuffixes = append(append([]string{}, unitSuffixes...), ".scope")
 
 // maxUnitNameLength is systemd's UNIT_NAME_MAX.
 const maxUnitNameLength = 255
 
-// validateUnitName checks that s is a plain systemd unit name that can safely
-// be used as a file name in the unit directory and as a systemctl argument.
+// validateUnitName checks that s is a systemd unit name that can safely be
+// used as a file name in the unit directory and as a systemctl argument: a
+// plain name such as "app.service", a template such as "app@.service", or an
+// instance such as "app@one.service".
 func validateUnitName(s string) error {
+	return validateUnitNameWith(s, unitSuffixes)
+}
+
+func validateUnitNameWith(s string, suffixes []string) error {
 	if s == "" {
 		return errors.New("unit name must not be empty")
 	}
 	if len(s) > maxUnitNameLength {
 		return fmt.Errorf("unit name %q is longer than %d characters", s, maxUnitNameLength)
 	}
-	if strings.Contains(s, "@") {
-		return fmt.Errorf("unit name %q contains \"@\"; template and instance units are not supported", s)
-	}
-	if s[0] == '-' || s[0] == '.' {
+	if s[0] == '-' || s[0] == '.' || s[0] == '@' {
 		return fmt.Errorf("unit name %q must not start with %q", s, s[0])
 	}
 	for _, c := range s {
 		ok := c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' ||
-			c == ':' || c == '-' || c == '_' || c == '.' || c == '\\'
+			c == ':' || c == '-' || c == '_' || c == '.' || c == '\\' || c == '@'
 		if !ok {
-			return fmt.Errorf("unit name %q contains the invalid character %q; only ASCII letters, digits, \":\", \"-\", \"_\", \".\" and \"\\\" are allowed", s, c)
+			return fmt.Errorf("unit name %q contains the invalid character %q; only ASCII letters, digits, \":\", \"-\", \"_\", \".\", \"\\\" and \"@\" are allowed", s, c)
 		}
 	}
-	for _, suffix := range unitSuffixes {
-		if strings.HasSuffix(s, suffix) && len(s) > len(suffix) {
-			return nil
+	suffix := ""
+	for _, sfx := range suffixes {
+		if strings.HasSuffix(s, sfx) && len(s) > len(sfx) {
+			suffix = sfx
 		}
 	}
-	return fmt.Errorf("unit name %q must be a name followed by one of the suffixes %s", s, strings.Join(unitSuffixes, ", "))
+	if suffix == "" {
+		return fmt.Errorf("unit name %q must be a name followed by one of the suffixes %s", s, strings.Join(suffixes, ", "))
+	}
+	if strings.Count(s, "@") > 1 {
+		return fmt.Errorf("unit name %q contains more than one \"@\"", s)
+	}
+	return nil
+}
+
+// isTemplateUnit reports whether name is a template unit such as
+// "app@.service". Templates cannot be started themselves, only instances.
+func isTemplateUnit(name string) bool {
+	i := strings.LastIndexByte(name, '.')
+	return i > 0 && name[i-1] == '@'
 }

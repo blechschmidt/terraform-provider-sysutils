@@ -11,7 +11,7 @@ description: |-
 
 An [action](https://developer.hashicorp.com/terraform/language/block/action) needs Terraform 1.14 or later. OpenTofu does not support actions and rejects `action` blocks.
 
-The [`sysutils_systemd_unit`](../resources/systemd_unit.md) resource reloads systemd itself whenever it changes a unit file. Use this action for unit files and drop-ins that other resources write, such as [`sysutils_file`](../resources/file.md), [`sysutils_template_file`](../resources/template_file.md) or [`sysutils_ini_value`](../resources/ini_value.md). The `restart` action of [`sysutils_service`](./service.md) also reloads systemd first, so you only need this action when the unit should not be restarted, or before another action that does not reload.
+The [`sysutils_systemd_unit`](../resources/systemd_unit.md) and [`sysutils_systemd_dropin`](../resources/systemd_dropin.md) resources reload systemd themselves whenever they change a unit file or drop-in. Use this action for unit files and drop-ins that other resources write, such as [`sysutils_file`](../resources/file.md), [`sysutils_template_file`](../resources/template_file.md) or [`sysutils_ini_value`](../resources/ini_value.md). The `restart` action of [`sysutils_service`](./service.md) also reloads systemd first, so you only need this action when the unit should not be restarted, or before another action that does not reload.
 
 ## Example Usage
 

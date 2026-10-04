@@ -41,12 +41,13 @@ WantedBy=multi-user.target
 `
 
 func TestValidateUnitName(t *testing.T) {
-	for _, ok := range []string{"app.service", "a.socket", "backup.timer", "srv-data.mount", "my_app-2.target", "x.path", "system-foo.slice", "dev-sdb1.swap", "a:b.service", `srv-my\x2ddata.mount`} {
+	for _, ok := range []string{"app.service", "a.socket", "backup.timer", "srv-data.mount", "my_app-2.target", "x.path", "system-foo.slice", "dev-sdb1.swap", "a:b.service", `srv-my\x2ddata.mount`,
+		"app@.service", "app@1.service", "getty@tty1.service", "dev-sda.device", "srv.automount", "app-.service"} {
 		if err := validateUnitName(ok); err != nil {
 			t.Errorf("validateUnitName(%q) = %v, want nil", ok, err)
 		}
 	}
-	for _, bad := range []string{"", "app", ".service", "app.conf", "-app.service", ".app.service", "app@.service", "app@1.service", "../app.service", "a/b.service", "a b.service", "app.service\n", "app.scope", "sda.device", strings.Repeat("a", 250) + ".service"} {
+	for _, bad := range []string{"", "app", ".service", "app.conf", "-app.service", ".app.service", "@.service", "@app.service", "a@b@c.service", "../app.service", "a/b.service", "a b.service", "app.service\n", "app.scope", "service", strings.Repeat("a", 250) + ".service"} {
 		if err := validateUnitName(bad); err == nil {
 			t.Errorf("validateUnitName(%q) = nil, want error", bad)
 		}
@@ -370,7 +371,10 @@ resource "sysutils_systemd_unit" "test" {
 				Config: config,
 				Check: resource.ComposeAggregateTestCheckFunc(
 					resource.TestCheckResourceAttr(testSystemdUnitResource, "content_sha256", sha256Hex([]byte(timerV1))),
-					resource.TestCheckNoResourceAttr(testSystemdUnitResource, "content"),
+					// content and the sections report the source's contents.
+					resource.TestCheckResourceAttr(testSystemdUnitResource, "content", timerV1),
+					resource.TestCheckResourceAttr(testSystemdUnitResource, "timer.on_calendar.0", "daily"),
+					resource.TestCheckResourceAttr(testSystemdUnitResource, "install.wanted_by.0", "timers.target"),
 					checkFileContent(f.unitFile(name), timerV1),
 					checkFakeUnit(f, name, true, "inactive"),
 				),
@@ -535,9 +539,9 @@ func TestSystemdUnit_invalidConfig(t *testing.T) {
 				ExpectError: regexp.MustCompile(`Invalid\s+unit\s+name`),
 			},
 			{
-				Config:      systemdUnitConfig("app@.service", testUnitV1, ""),
+				Config:      systemdUnitConfig("app@.service", testUnitV1, `  state = "running"`),
 				PlanOnly:    true,
-				ExpectError: regexp.MustCompile(`template\s+and\s+instance\s+units`),
+				ExpectError: regexp.MustCompile(`Templates\s+cannot\s+be\s+started`),
 			},
 			{
 				Config:      systemdUnitConfig("app.service", testUnitV1, `  state = "started"`),
@@ -547,7 +551,7 @@ func TestSystemdUnit_invalidConfig(t *testing.T) {
 			{
 				Config:      systemdUnitConfig("app.service", testUnitV1, `  source = "/etc/hostname"`),
 				PlanOnly:    true,
-				ExpectError: regexp.MustCompile(`Invalid\s+Attribute\s+Combination`),
+				ExpectError: regexp.MustCompile(`Exactly\s+one\s+of\s+content,\s+source\s+and\s+the\s+section\s+attributes`),
 			},
 			{
 				Config:      systemdUnitConfig("app.service", testUnitV1, `  timeout = "0s"`),
@@ -560,7 +564,7 @@ resource "sysutils_systemd_unit" "test" {
   name = "app.service"
 }`,
 				PlanOnly:    true,
-				ExpectError: regexp.MustCompile(`Missing\s+Attribute\s+Configuration`),
+				ExpectError: regexp.MustCompile(`Exactly\s+one\s+of\s+content,\s+source\s+and\s+the\s+section\s+attributes`),
 			},
 		},
 	})

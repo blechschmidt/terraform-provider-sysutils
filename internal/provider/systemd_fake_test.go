@@ -22,6 +22,12 @@ import (
 // inactive right after starting. Units without an [Install] section are
 // static and cannot be enabled; like in systemd, an enabled unit whose
 // [Install] section is removed stays enabled until it is re-enabled.
+//
+// Instances such as "app@one.service" load from their own file or from their
+// template's file. Templates cannot be shown, started or queried with
+// is-active, and can only be enabled with DefaultInstance=. show accepts a
+// glob pattern and then prints one block per matching loaded unit. Drop-in
+// files in "<unit>.d" directories are part of a unit's content.
 type fakeSystemd struct {
 	t       *testing.T
 	unitDir string
@@ -31,6 +37,7 @@ type fakeSystemd struct {
 	enabled  map[string]bool
 	active   map[string]string
 	vendor   map[string]string // name -> FragmentPath of units outside unitDir
+	implicit map[string]string // name -> ActiveState of units without a unit file, such as kernel mounts
 	calls    [][]string
 	timeouts map[string]bool // verbs that time out
 }
@@ -44,6 +51,7 @@ func newFakeSystemd(t *testing.T) *fakeSystemd {
 		enabled:  map[string]bool{},
 		active:   map[string]string{},
 		vendor:   map[string]string{},
+		implicit: map[string]string{},
 		timeouts: map[string]bool{},
 	}
 }
@@ -133,9 +141,16 @@ func (f *fakeSystemd) run(_ context.Context, spec execSpec) (*execResult, error)
 		return res, nil
 	}
 	name := args[len(args)-1]
-	content, loaded := f.loaded[name]
+	content, _, loaded := f.resolve(name)
 	fileContent, fileErr := os.ReadFile(f.unitFile(name))
 	fileExists := fileErr == nil
+	template := isTemplateUnit(name)
+	if template {
+		switch verb {
+		case "show", "is-active", "start", "stop", "restart", "try-restart", "reset-failed":
+			return out(1, "", fmt.Sprintf("Unit name %s is neither a valid invocation ID nor unit name.\n", name))
+		}
+	}
 
 	switch verb {
 	case "daemon-reload":
@@ -150,24 +165,49 @@ func (f *fakeSystemd) run(_ context.Context, spec execSpec) (*execResult, error)
 				f.loaded[e.Name()] = string(data)
 			}
 		}
-		return out(0, "", "")
-	case "show":
-		props := map[string]string{"LoadState": "not-found", "FragmentPath": ""}
-		switch {
-		case f.vendor[name] != "":
-			props = map[string]string{"LoadState": "loaded", "FragmentPath": f.vendor[name]}
-		case loaded && strings.Contains(content, "[Broken]"):
-			props = map[string]string{"LoadState": "bad-setting", "FragmentPath": f.unitFile(name)}
-		case loaded:
-			props = map[string]string{"LoadState": "loaded", "FragmentPath": f.unitFile(name)}
-		}
-		var sb strings.Builder
-		for _, a := range args[1:] {
-			if p, ok := strings.CutPrefix(a, "--property="); ok {
-				fmt.Fprintf(&sb, "%s=%s\n", p, props[p])
+		for _, e := range entries {
+			if unit, ok := strings.CutSuffix(e.Name(), ".d"); ok && e.IsDir() {
+				dropIns, _ := filepath.Glob(filepath.Join(f.unitDir, e.Name(), "*.conf"))
+				for _, d := range dropIns {
+					data, _ := os.ReadFile(d)
+					f.loaded[unit] += "\n" + string(data)
+				}
 			}
 		}
-		return out(0, sb.String(), "")
+		return out(0, "", "")
+	case "show":
+		names := []string{name}
+		if strings.Contains(name, "*") {
+			names = nil
+			for _, n := range f.knownUnits() {
+				if ok, _ := filepath.Match(name, n); ok {
+					names = append(names, n)
+				}
+			}
+		}
+		var blocks []string
+		for _, n := range names {
+			c, frag, ok := f.resolve(n)
+			props := map[string]string{"Id": n, "LoadState": "not-found", "FragmentPath": "", "ActiveState": f.active[n]}
+			switch {
+			case f.implicit[n] != "" && !ok:
+				props["LoadState"], props["ActiveState"] = "loaded", f.implicit[n]
+			case f.vendor[n] != "":
+				props["LoadState"], props["FragmentPath"] = "loaded", f.vendor[n]
+			case ok && strings.Contains(c, "[Broken]"):
+				props["LoadState"], props["FragmentPath"] = "bad-setting", frag
+			case ok:
+				props["LoadState"], props["FragmentPath"] = "loaded", frag
+			}
+			var sb strings.Builder
+			for _, a := range args[1:] {
+				if p, ok := strings.CutPrefix(a, "--property="); ok {
+					fmt.Fprintf(&sb, "%s=%s\n", p, props[p])
+				}
+			}
+			blocks = append(blocks, sb.String())
+		}
+		return out(0, strings.Join(blocks, "\n"), "")
 	case "is-enabled":
 		switch {
 		case !fileExists:
@@ -183,6 +223,9 @@ func (f *fakeSystemd) run(_ context.Context, spec execSpec) (*execResult, error)
 	case "is-active":
 		state := f.active[name]
 		if state == "" {
+			state = f.implicit[name]
+		}
+		if state == "" {
 			state = "inactive"
 		}
 		code := 3
@@ -193,6 +236,9 @@ func (f *fakeSystemd) run(_ context.Context, spec execSpec) (*execResult, error)
 	case "enable", "disable", "reenable":
 		if !fileExists {
 			return out(1, "", fmt.Sprintf("Failed to %s unit: Unit file %s does not exist.\n", verb, name))
+		}
+		if template && !strings.Contains(string(fileContent), "DefaultInstance=") {
+			return out(1, "", fmt.Sprintf("Failed to %s unit: Unit %s is a template without DefaultInstance=.\n", verb, name))
 		}
 		if !strings.Contains(string(fileContent), "[Install]") {
 			// reenable disables first, which removes the old symlinks.
@@ -234,4 +280,38 @@ func (f *fakeSystemd) run(_ context.Context, spec execSpec) (*execResult, error)
 	default:
 		return out(1, "", fmt.Sprintf("fake systemd: unsupported command %q\n", args))
 	}
+}
+
+// resolve returns the content and fragment path that name is loaded from:
+// its own file or, for an instance, its template's file. It must be called
+// with f.mu held.
+func (f *fakeSystemd) resolve(name string) (content, fragment string, loaded bool) {
+	if c, ok := f.loaded[name]; ok {
+		return c, f.unitFile(name), true
+	}
+	at := strings.IndexByte(name, '@')
+	dot := strings.LastIndexByte(name, '.')
+	if at > 0 && dot > at+1 {
+		tmpl := name[:at+1] + name[dot:]
+		if c, ok := f.loaded[tmpl]; ok {
+			return c, f.unitFile(tmpl), true
+		}
+	}
+	return "", "", false
+}
+
+// knownUnits returns the units the fake manager has loaded: unit files
+// other than templates, and units that were started. It must be called
+// with f.mu held.
+func (f *fakeSystemd) knownUnits() []string {
+	seen := map[string]bool{}
+	for n := range f.loaded {
+		if !isTemplateUnit(n) {
+			seen[n] = true
+		}
+	}
+	for n := range f.active {
+		seen[n] = true
+	}
+	return sortedKeys(seen)
 }
